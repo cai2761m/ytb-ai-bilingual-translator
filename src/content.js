@@ -4,6 +4,8 @@
   const Core = globalThis.YTBTCore;
   const CHANNEL = "__ytbt_player_response__";
   const BATCH_SIZE = 30;
+  const RETRY_BATCH_SIZE = 5;
+  const MAX_CUE_TRANSLATION_RETRIES = 2;
   const MAX_PARALLEL_BATCHES = 2;
   const PRIORITY_WINDOW_MS = 120000;
   const URGENT_RESCHEDULE_MS = 1000;
@@ -827,21 +829,59 @@
       if (translatedText) {
         cue.translatedText = translatedText;
         cue.status = "translated";
+        cue.translationRetryCount = 0;
       } else {
-        cue.status = "failed";
-        cue.lastError = "Translation API did not return this cue.";
+        queueCueTranslationRetry(cue, "Translation API did not return this cue.");
       }
     }
   }
 
   function handleBatchFailure(batch, message) {
+    const retryable = isRetryableTranslationError(message);
+
     for (const cue of batch.cues) {
       if (cue.status === "translating") {
+        if (retryable && queueCueTranslationRetry(cue, message)) {
+          continue;
+        }
         cue.status = "failed";
         cue.lastError = message;
       }
     }
     setStatus(message.includes("API Key") ? "请在扩展选项页填写翻译 API 配置。" : `翻译失败：${message}`);
+  }
+
+  function queueCueTranslationRetry(cue, message) {
+    cue.translationRetryCount = Number(cue.translationRetryCount || 0) + 1;
+    cue.lastError = message;
+
+    if (cue.translationRetryCount > MAX_CUE_TRANSLATION_RETRIES) {
+      cue.status = "failed";
+      return false;
+    }
+
+    cue.status = "pending";
+    enqueueRetryCues([cue]);
+    return true;
+  }
+
+  function enqueueRetryCues(cues) {
+    const retryCues = cues.filter((cue) => cue && cue.status === "pending");
+    for (let index = retryCues.length; index > 0; index -= RETRY_BATCH_SIZE) {
+      const start = Math.max(0, index - RETRY_BATCH_SIZE);
+      state.queue.unshift({ cues: retryCues.slice(start, index) });
+    }
+  }
+
+  function isRetryableTranslationError(message) {
+    const text = String(message || "");
+    if (/API Key|not configured|base URL|model|401|403|429|quota|insufficient|rate limit/i.test(text)) {
+      return false;
+    }
+    return (
+      /did not contain usable translations|non-JSON|empty content|timeout|aborted|network|failed to fetch|request failed \(5\d\d\)/i.test(text) ||
+      !/request failed \(\d+\)/i.test(text)
+    );
   }
 
   function updateProgressStatus() {

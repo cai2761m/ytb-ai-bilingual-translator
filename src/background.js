@@ -164,7 +164,8 @@ async function translateBatch({ translationConfig, sourceLanguage, targetLanguag
         role: "system",
         content:
           "You are a subtitle translation engine. Translate English subtitles into natural Simplified Chinese. " +
-          "Keep meaning concise for on-screen reading. Output json only in this exact format: " +
+          "Keep meaning concise for on-screen reading. Return exactly one item for every input id and never skip ids. " +
+          "Output json only in this exact format: " +
           "{\"items\":[{\"id\":\"0\",\"translatedText\":\"...\"}]}. Do not add commentary."
       },
       {
