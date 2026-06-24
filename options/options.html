@@ -10,13 +10,38 @@
     <main class="page">
       <header>
         <h1>YouTube 双语字幕</h1>
-        <p>填写 DeepSeek API Key 后，插件会在 YouTube 播放页预翻译英文字幕并显示中英双语字幕。</p>
+        <p>配置翻译 API 后，插件会在 YouTube 播放页预翻译英文字幕并显示中英双语字幕。</p>
       </header>
 
       <form id="settings-form" class="panel">
         <label class="field">
-          <span>DeepSeek API Key</span>
-          <input id="deepseekApiKey" type="password" autocomplete="off" placeholder="sk-...">
+          <span>翻译服务</span>
+          <select id="translationProvider">
+            <option value="deepseek">DeepSeek</option>
+            <option value="custom">自定义 OpenAI-compatible API</option>
+          </select>
+        </label>
+
+        <label class="field">
+          <span>API Key</span>
+          <input id="translationApiKey" type="password" autocomplete="off" placeholder="sk-...">
+        </label>
+
+        <div class="grid">
+          <label class="field">
+            <span>Base URL</span>
+            <input id="translationBaseUrl" type="url" autocomplete="off" placeholder="https://api.deepseek.com">
+          </label>
+
+          <label class="field">
+            <span>模型</span>
+            <input id="translationModel" type="text" autocomplete="off" placeholder="deepseek-v4-flash">
+          </label>
+        </div>
+
+        <label class="toggle">
+          <input id="translationJsonResponse" type="checkbox">
+          <span>请求 JSON 输出模式（不兼容时可关闭）</span>
         </label>
 
         <div class="grid">
@@ -56,7 +81,7 @@
 
       <section class="notes">
         <h2>使用说明</h2>
-        <p>插件依赖 YouTube 播放器页面提供的英文字幕轨道。如果视频没有英文自动字幕或英文字幕，插件会提示未找到字幕。</p>
+        <p>DeepSeek 可直接使用默认配置。其他厂商只要兼容 OpenAI Chat Completions，即可填写 Base URL、模型和 API Key 使用。</p>
       </section>
     </main>
 

@@ -3,7 +3,11 @@
 
   const Core = globalThis.YTBTCore;
   const form = document.querySelector("#settings-form");
-  const apiKeyInput = document.querySelector("#deepseekApiKey");
+  const translationProvider = document.querySelector("#translationProvider");
+  const apiKeyInput = document.querySelector("#translationApiKey");
+  const translationBaseUrl = document.querySelector("#translationBaseUrl");
+  const translationModel = document.querySelector("#translationModel");
+  const translationJsonResponse = document.querySelector("#translationJsonResponse");
   const sourceLanguage = document.querySelector("#sourceLanguage");
   const targetLanguage = document.querySelector("#targetLanguage");
   const fontScale = document.querySelector("#fontScale");
@@ -16,13 +20,20 @@
 
   async function init() {
     const settings = await storageGet(Core.DEFAULT_SETTINGS);
-    apiKeyInput.value = settings.deepseekApiKey || "";
+    const config = Core.resolveTranslationConfig(settings);
+    translationProvider.value = config.provider;
+    apiKeyInput.value = settings.translationApiKey || settings.deepseekApiKey || "";
+    translationBaseUrl.value = settings.translationBaseUrl || (config.provider === "deepseek" ? Core.DEEPSEEK_BASE_URL : "");
+    translationModel.value = settings.translationModel || (config.provider === "deepseek" ? Core.DEEPSEEK_MODEL : "");
+    translationJsonResponse.checked = settings.translationJsonResponse !== false;
     sourceLanguage.value = settings.sourceLanguage || Core.DEFAULT_SETTINGS.sourceLanguage;
     targetLanguage.value = settings.targetLanguage || Core.DEFAULT_SETTINGS.targetLanguage;
     fontScale.value = settings.fontScale || Core.DEFAULT_SETTINGS.fontScale;
     subtitleEnabled.checked = settings.subtitleEnabled !== false;
     updateFontScaleLabel();
+    updateProviderPlaceholders();
 
+    translationProvider.addEventListener("change", handleProviderChange);
     fontScale.addEventListener("input", updateFontScaleLabel);
     form.addEventListener("submit", saveSettings);
     clearCache.addEventListener("click", clearTranslationCache);
@@ -42,8 +53,15 @@
 
   async function saveSettings(event) {
     event.preventDefault();
+    const apiKey = apiKeyInput.value.trim();
+    const provider = translationProvider.value;
     await storageSet({
-      deepseekApiKey: apiKeyInput.value.trim(),
+      translationProvider: provider,
+      translationApiKey: apiKey,
+      translationBaseUrl: translationBaseUrl.value.trim(),
+      translationModel: translationModel.value.trim(),
+      translationJsonResponse: translationJsonResponse.checked,
+      deepseekApiKey: provider === "deepseek" ? apiKey : "",
       sourceLanguage: sourceLanguage.value,
       targetLanguage: targetLanguage.value,
       fontScale: Number(fontScale.value),
@@ -64,6 +82,27 @@
 
   function updateFontScaleLabel() {
     fontScaleValue.textContent = `${Number(fontScale.value || 1).toFixed(1)}x`;
+  }
+
+  function handleProviderChange() {
+    if (translationProvider.value === "deepseek") {
+      translationBaseUrl.value = Core.DEEPSEEK_BASE_URL;
+      translationModel.value = Core.DEEPSEEK_MODEL;
+    } else if (translationBaseUrl.value.trim() === Core.DEEPSEEK_BASE_URL) {
+      translationBaseUrl.value = "";
+      translationModel.value = "";
+    }
+    updateProviderPlaceholders();
+  }
+
+  function updateProviderPlaceholders() {
+    if (translationProvider.value === "deepseek") {
+      translationBaseUrl.placeholder = Core.DEEPSEEK_BASE_URL;
+      translationModel.placeholder = Core.DEEPSEEK_MODEL;
+    } else {
+      translationBaseUrl.placeholder = "https://api.example.com/v1";
+      translationModel.placeholder = "model-name";
+    }
   }
 
   function showStatus(message) {

@@ -3,6 +3,11 @@
 
   const DEFAULT_SETTINGS = Object.freeze({
     deepseekApiKey: "",
+    translationProvider: "deepseek",
+    translationApiKey: "",
+    translationBaseUrl: "",
+    translationModel: "",
+    translationJsonResponse: true,
     targetLanguage: "zh-CN",
     sourceLanguage: "en",
     fontScale: 1,
@@ -13,6 +18,7 @@
 
   const DEEPSEEK_MODEL = "deepseek-v4-flash";
   const MERGE_VERSION = "1";
+  const DEEPSEEK_BASE_URL = "https://api.deepseek.com";
 
   const SENTENCE_END_RE = /[.!?。！？]["')\]]?$/;
   const TAG_RE = /<[^>]+>/g;
@@ -441,6 +447,39 @@
     return `ytbt:${fingerprintText(safeParts.join("|"))}`;
   }
 
+  function buildChatCompletionsUrl(baseUrl) {
+    const raw = String(baseUrl || "").trim();
+    if (!raw) {
+      return "";
+    }
+
+    const trimmed = raw.replace(/\/+$/, "");
+    return /\/chat\/completions$/i.test(trimmed) ? trimmed : `${trimmed}/chat/completions`;
+  }
+
+  function resolveTranslationConfig(settings) {
+    const source = Object.assign({}, DEFAULT_SETTINGS, settings || {});
+    const provider = source.translationProvider === "custom" ? "custom" : "deepseek";
+    const apiKey = String(source.translationApiKey || source.deepseekApiKey || "").trim();
+    const baseUrl = String(
+      source.translationBaseUrl || (provider === "deepseek" ? DEEPSEEK_BASE_URL : "")
+    ).trim();
+    const model = String(
+      source.translationModel || (provider === "deepseek" ? DEEPSEEK_MODEL : "")
+    ).trim();
+
+    return {
+      provider,
+      providerLabel: provider === "deepseek" ? "DeepSeek" : "Custom API",
+      apiKey,
+      baseUrl,
+      chatCompletionsUrl: buildChatCompletionsUrl(baseUrl),
+      model,
+      useJsonResponseFormat: source.translationJsonResponse !== false,
+      includeDeepSeekThinkingFlag: provider === "deepseek"
+    };
+  }
+
   function parseDeepSeekTranslationContent(content) {
     const parsed = typeof content === "string" ? JSON.parse(content) : content;
     const items = [];
@@ -487,6 +526,7 @@
   const api = {
     DEFAULT_SETTINGS,
     DEEPSEEK_MODEL,
+    DEEPSEEK_BASE_URL,
     MERGE_VERSION,
     decodeHtmlEntities,
     normalizeSubtitleText,
@@ -500,6 +540,8 @@
     findCueAtTime,
     fingerprintText,
     makeCacheKey,
+    buildChatCompletionsUrl,
+    resolveTranslationConfig,
     parseDeepSeekTranslationContent
   };
 

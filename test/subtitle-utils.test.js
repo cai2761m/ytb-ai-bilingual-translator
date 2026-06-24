@@ -198,3 +198,39 @@ test("cache keys are stable and namespaced", () => {
   assert.match(key, /^ytbt:/);
   assert.equal(key, Core.makeCacheKey(["video", "track", "model"]));
 });
+
+test("resolveTranslationConfig keeps old DeepSeek API key compatible", () => {
+  const config = Core.resolveTranslationConfig({
+    deepseekApiKey: "old-key"
+  });
+
+  assert.equal(config.provider, "deepseek");
+  assert.equal(config.apiKey, "old-key");
+  assert.equal(config.model, Core.DEEPSEEK_MODEL);
+  assert.equal(config.chatCompletionsUrl, "https://api.deepseek.com/chat/completions");
+  assert.equal(config.includeDeepSeekThinkingFlag, true);
+});
+
+test("resolveTranslationConfig supports custom OpenAI-compatible API", () => {
+  const config = Core.resolveTranslationConfig({
+    translationProvider: "custom",
+    translationApiKey: "custom-key",
+    translationBaseUrl: "https://api.example.com/v1/",
+    translationModel: "custom-model",
+    translationJsonResponse: false
+  });
+
+  assert.equal(config.provider, "custom");
+  assert.equal(config.apiKey, "custom-key");
+  assert.equal(config.model, "custom-model");
+  assert.equal(config.chatCompletionsUrl, "https://api.example.com/v1/chat/completions");
+  assert.equal(config.useJsonResponseFormat, false);
+  assert.equal(config.includeDeepSeekThinkingFlag, false);
+});
+
+test("buildChatCompletionsUrl accepts full endpoint URLs", () => {
+  assert.equal(
+    Core.buildChatCompletionsUrl("https://api.example.com/v1/chat/completions"),
+    "https://api.example.com/v1/chat/completions"
+  );
+});

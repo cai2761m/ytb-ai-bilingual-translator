@@ -1,7 +1,6 @@
 importScripts("shared.js");
 
 const Core = globalThis.YTBTCore;
-const API_URL = "https://api.deepseek.com/chat/completions";
 const MAX_RETRIES = 2;
 const REQUEST_TIMEOUT_MS = 20000;
 
@@ -39,19 +38,29 @@ function storageSet(values) {
 
 async function handleTranslateBatch(message) {
   const settings = await storageGet(Core.DEFAULT_SETTINGS);
-  const apiKey = String(settings.deepseekApiKey || "").trim();
   const targetLanguage = settings.targetLanguage || Core.DEFAULT_SETTINGS.targetLanguage;
   const sourceLanguage = settings.sourceLanguage || Core.DEFAULT_SETTINGS.sourceLanguage;
-  const model = Core.DEEPSEEK_MODEL;
+  const translationConfig = Core.resolveTranslationConfig(settings);
 
-  if (!apiKey) {
+  if (!translationConfig.apiKey) {
     return {
       type: "TRANSLATE_RESULT",
       ok: false,
       videoId: message.videoId,
       batchId: message.batchId,
       items: [],
-      errors: [{ code: "missing_api_key", message: "DeepSeek API Key is not configured." }]
+      errors: [{ code: "missing_api_key", message: `${translationConfig.providerLabel} API Key is not configured.` }]
+    };
+  }
+
+  if (!translationConfig.chatCompletionsUrl || !translationConfig.model) {
+    return {
+      type: "TRANSLATE_RESULT",
+      ok: false,
+      videoId: message.videoId,
+      batchId: message.batchId,
+      items: [],
+      errors: [{ code: "missing_provider_config", message: `${translationConfig.providerLabel} base URL or model is not configured.` }]
     };
   }
 
@@ -59,7 +68,9 @@ async function handleTranslateBatch(message) {
   const cacheKey = Core.makeCacheKey([
     message.videoId || "",
     message.trackFingerprint || "",
-    model,
+    translationConfig.provider,
+    translationConfig.chatCompletionsUrl,
+    translationConfig.model,
     targetLanguage,
     Core.MERGE_VERSION,
     settings.cacheVersion || "1"
@@ -98,8 +109,7 @@ async function handleTranslateBatch(message) {
   }
 
   const translatedItems = await translateWithRetry({
-    apiKey,
-    model,
+    translationConfig,
     targetLanguage,
     sourceLanguage,
     cues: missingCues
@@ -114,7 +124,9 @@ async function handleTranslateBatch(message) {
     [cacheKey]: {
       items: mergedCacheItems,
       updatedAt: Date.now(),
-      model,
+      provider: translationConfig.provider,
+      model: translationConfig.model,
+      baseUrl: translationConfig.baseUrl,
       targetLanguage
     }
   });
@@ -144,9 +156,9 @@ async function translateWithRetry(request) {
   throw lastError;
 }
 
-async function translateBatch({ apiKey, model, sourceLanguage, targetLanguage, cues }) {
+async function translateBatch({ translationConfig, sourceLanguage, targetLanguage, cues }) {
   const payload = {
-    model,
+    model: translationConfig.model,
     messages: [
       {
         role: "system",
@@ -164,32 +176,37 @@ async function translateBatch({ apiKey, model, sourceLanguage, targetLanguage, c
         })
       }
     ],
-    response_format: { type: "json_object" },
-    thinking: { type: "disabled" },
     stream: false,
     temperature: 0.1,
     max_tokens: 4096
   };
 
-  const response = await fetchWithTimeout(API_URL, {
+  if (translationConfig.useJsonResponseFormat) {
+    payload.response_format = { type: "json_object" };
+  }
+  if (translationConfig.includeDeepSeekThinkingFlag) {
+    payload.thinking = { type: "disabled" };
+  }
+
+  const response = await fetchWithTimeout(translationConfig.chatCompletionsUrl, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`
+      Authorization: `Bearer ${translationConfig.apiKey}`
     },
     body: JSON.stringify(payload)
   });
 
   const bodyText = await response.text();
   if (!response.ok) {
-    throw new Error(`DeepSeek request failed (${response.status}): ${bodyText.slice(0, 300)}`);
+    throw new Error(`${translationConfig.providerLabel} request failed (${response.status}): ${bodyText.slice(0, 300)}`);
   }
 
   let body;
   try {
     body = JSON.parse(bodyText);
   } catch (error) {
-    throw new Error("DeepSeek returned non-JSON response.");
+    throw new Error(`${translationConfig.providerLabel} returned non-JSON response.`);
   }
 
   const content =
@@ -200,7 +217,7 @@ async function translateBatch({ apiKey, model, sourceLanguage, targetLanguage, c
     body.choices[0].message.content;
 
   if (!content) {
-    throw new Error("DeepSeek returned empty content.");
+    throw new Error(`${translationConfig.providerLabel} returned empty content.`);
   }
 
   const items = Core.parseDeepSeekTranslationContent(content);
@@ -208,7 +225,7 @@ async function translateBatch({ apiKey, model, sourceLanguage, targetLanguage, c
   const filtered = items.filter((item) => expectedIds.has(String(item.id)));
 
   if (!filtered.length) {
-    throw new Error("DeepSeek response did not contain usable translations.");
+    throw new Error(`${translationConfig.providerLabel} response did not contain usable translations.`);
   }
 
   return filtered;

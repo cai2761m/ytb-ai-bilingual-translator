@@ -141,7 +141,17 @@
       state.settings = normalizeSettings(state.settings);
       applySettings();
 
-      if (changes.deepseekApiKey || changes.targetLanguage || changes.sourceLanguage || changes.cacheVersion) {
+      if (
+        changes.deepseekApiKey ||
+        changes.translationProvider ||
+        changes.translationApiKey ||
+        changes.translationBaseUrl ||
+        changes.translationModel ||
+        changes.translationJsonResponse ||
+        changes.targetLanguage ||
+        changes.sourceLanguage ||
+        changes.cacheVersion
+      ) {
         for (const cue of state.cues) {
           if (cue.status === "failed" || !cue.translatedText) {
             cue.status = "pending";
@@ -672,7 +682,7 @@
     }
 
     if (!hasApiKey()) {
-      setStatus("请在扩展选项页填写 DeepSeek API Key。");
+      setStatus("请在扩展选项页填写翻译 API 配置。");
       return;
     }
 
@@ -819,7 +829,7 @@
         cue.status = "translated";
       } else {
         cue.status = "failed";
-        cue.lastError = "DeepSeek did not return this cue.";
+        cue.lastError = "Translation API did not return this cue.";
       }
     }
   }
@@ -831,7 +841,7 @@
         cue.lastError = message;
       }
     }
-    setStatus(message.includes("API Key") ? "请在扩展选项页填写 DeepSeek API Key。" : `翻译失败：${message}`);
+    setStatus(message.includes("API Key") ? "请在扩展选项页填写翻译 API 配置。" : `翻译失败：${message}`);
   }
 
   function updateProgressStatus() {
@@ -853,7 +863,8 @@
   }
 
   function hasApiKey() {
-    return Boolean(String(state.settings.deepseekApiKey || "").trim());
+    const config = Core.resolveTranslationConfig(state.settings);
+    return Boolean(config.apiKey && config.chatCompletionsUrl && config.model);
   }
 
   function watchVideoElement() {
@@ -1419,7 +1430,7 @@
 
   function fallbackTextForCue(cue) {
     if (!hasApiKey()) {
-      return "请填写 DeepSeek API Key";
+      return "请填写翻译 API 配置";
     }
     if (cue.status === "failed") {
       return "翻译失败";
