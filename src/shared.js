@@ -13,6 +13,7 @@
     fontScale: 1,
     subtitleEnabled: true,
     subtitlePosition: null,
+    asrCorrectionEnabled: true,
     cacheVersion: "1",
     translationCacheMaxItems: 2000
   });

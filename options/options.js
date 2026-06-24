@@ -8,6 +8,7 @@
   const translationBaseUrl = document.querySelector("#translationBaseUrl");
   const translationModel = document.querySelector("#translationModel");
   const translationJsonResponse = document.querySelector("#translationJsonResponse");
+  const asrCorrectionEnabled = document.querySelector("#asrCorrectionEnabled");
   const sourceLanguage = document.querySelector("#sourceLanguage");
   const targetLanguage = document.querySelector("#targetLanguage");
   const fontScale = document.querySelector("#fontScale");
@@ -26,6 +27,7 @@
     translationBaseUrl.value = settings.translationBaseUrl || (config.provider === "deepseek" ? Core.DEEPSEEK_BASE_URL : "");
     translationModel.value = settings.translationModel || (config.provider === "deepseek" ? Core.DEEPSEEK_MODEL : "");
     translationJsonResponse.checked = settings.translationJsonResponse !== false;
+    asrCorrectionEnabled.checked = settings.asrCorrectionEnabled !== false;
     sourceLanguage.value = settings.sourceLanguage || Core.DEFAULT_SETTINGS.sourceLanguage;
     targetLanguage.value = settings.targetLanguage || Core.DEFAULT_SETTINGS.targetLanguage;
     fontScale.value = settings.fontScale || Core.DEFAULT_SETTINGS.fontScale;
@@ -61,6 +63,7 @@
       translationBaseUrl: translationBaseUrl.value.trim(),
       translationModel: translationModel.value.trim(),
       translationJsonResponse: translationJsonResponse.checked,
+      asrCorrectionEnabled: asrCorrectionEnabled.checked,
       deepseekApiKey: provider === "deepseek" ? apiKey : "",
       sourceLanguage: sourceLanguage.value,
       targetLanguage: targetLanguage.value,

@@ -260,6 +260,10 @@ test("resolveTranslationConfig keeps old DeepSeek API key compatible", () => {
   assert.equal(config.includeDeepSeekThinkingFlag, true);
 });
 
+test("default settings enable ASR correction", () => {
+  assert.equal(Core.DEFAULT_SETTINGS.asrCorrectionEnabled, true);
+});
+
 test("resolveTranslationConfig supports custom OpenAI-compatible API", () => {
   const config = Core.resolveTranslationConfig({
     translationProvider: "custom",

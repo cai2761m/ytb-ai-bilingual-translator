@@ -48,6 +48,7 @@ async function handleTranslateBatch(message) {
   const settings = await storageGet(Core.DEFAULT_SETTINGS);
   const targetLanguage = settings.targetLanguage || Core.DEFAULT_SETTINGS.targetLanguage;
   const sourceLanguage = settings.sourceLanguage || Core.DEFAULT_SETTINGS.sourceLanguage;
+  const asrCorrectionEnabled = settings.asrCorrectionEnabled !== false;
   const translationConfig = Core.resolveTranslationConfig(settings);
 
   if (!translationConfig.apiKey) {
@@ -73,7 +74,7 @@ async function handleTranslateBatch(message) {
   }
 
   const cues = Array.isArray(message.cues) ? message.cues : [];
-  const cacheKey = Core.makeCacheKey([
+  const legacyCacheKeyParts = [
     message.videoId || "",
     message.trackFingerprint || "",
     translationConfig.provider,
@@ -82,7 +83,15 @@ async function handleTranslateBatch(message) {
     targetLanguage,
     Core.MERGE_VERSION,
     settings.cacheVersion || "1"
+  ];
+  const correctedCacheKeyParts = legacyCacheKeyParts.slice(0, 5).concat([
+    sourceLanguage,
+    targetLanguage,
+    "asr-correction-on",
+    Core.MERGE_VERSION,
+    settings.cacheVersion || "1"
   ]);
+  const cacheKey = Core.makeCacheKey(asrCorrectionEnabled ? correctedCacheKeyParts : legacyCacheKeyParts);
 
   const cache = await storageGet({ [cacheKey]: { items: {}, updatedAt: 0 } });
   const cacheValue = cache[cacheKey] || { items: {} };
@@ -130,6 +139,7 @@ async function handleTranslateBatch(message) {
     translationConfig,
     targetLanguage,
     sourceLanguage,
+    asrCorrectionEnabled,
     cues: missingCues
   });
 
@@ -148,7 +158,9 @@ async function handleTranslateBatch(message) {
       provider: translationConfig.provider,
       model: translationConfig.model,
       baseUrl: translationConfig.baseUrl,
-      targetLanguage
+      targetLanguage,
+      sourceLanguage,
+      asrCorrectionEnabled
     },
     addedCount: translatedItems.length,
     maxItems: Number(settings.translationCacheMaxItems) || Core.DEFAULT_CACHE_MAX_ITEMS
@@ -188,12 +200,15 @@ async function translateWithRetry(request) {
   throw lastError;
 }
 
-async function translateBatch({ translationConfig, sourceLanguage, targetLanguage, cues }) {
+async function translateBatch({ translationConfig, sourceLanguage, targetLanguage, asrCorrectionEnabled, cues }) {
   const sourceLabel = Core.sourceLanguageLabel(sourceLanguage);
   const targetLabel = Core.targetLanguageLabel(targetLanguage);
   // Allow roughly 200 output tokens per cue so longer batches are not silently
   // truncated. Bounded to a sane [2048, 8000] range.
   const maxTokens = Math.min(8000, Math.max(2048, cues.length * 200));
+  const sourcePolishInstruction = asrCorrectionEnabled
+    ? "Before translating, correct only obvious ASR recognition mistakes in the source using nearby batch context: wrong homophones, broken word boundaries, missing small words, and clear recognition errors. Preserve technical terms, names, code identifiers, acronyms, numbers, and uncertain words exactly when unsure. "
+    : "Do not rewrite the source words for ASR correction; only restore natural punctuation and capitalization. ";
 
   const payload = {
     model: translationConfig.model,
@@ -202,7 +217,8 @@ async function translateBatch({ translationConfig, sourceLanguage, targetLanguag
         role: "system",
         content:
           `You are a subtitle translation engine. Translate ${sourceLabel} subtitles into natural ${targetLabel}. ` +
-          "Keep meaning concise for on-screen reading. Also restore natural punctuation and capitalization for the English source. " +
+          sourcePolishInstruction +
+          "Keep meaning concise for on-screen reading. The displaySourceText field must contain the polished source subtitle, and translatedText must translate that polished meaning. " +
           "Return exactly one item for every input id and never skip ids. " +
           "Output json only in this exact format: " +
           "{\"items\":[{\"id\":\"0\",\"translatedText\":\"...\",\"displaySourceText\":\"...\"}]}. Do not add commentary."
@@ -212,6 +228,7 @@ async function translateBatch({ translationConfig, sourceLanguage, targetLanguag
         content: JSON.stringify({
           sourceLanguage,
           targetLanguage,
+          asrCorrectionEnabled: Boolean(asrCorrectionEnabled),
           items: cues.map((cue) => ({ id: String(cue.id), text: cue.sourceText }))
         })
       }
