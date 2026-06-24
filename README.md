@@ -7,7 +7,7 @@ Chrome MV3 extension that reads YouTube's available English caption track, merge
 1. Open `chrome://extensions`.
 2. Enable Developer mode.
 3. Click "Load unpacked".
-4. Select this folder: `C:\Users\34254\Documents\字幕8888`.
+4. Select the project folder you downloaded or cloned.
 5. Click the extension icon to open settings and configure a translation API.
 
 ## Behavior
