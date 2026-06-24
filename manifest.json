@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "YouTube Bilingual API Subtitles",
+  "name": "ytb-ai-bilingual-translator",
   "version": "0.1.0",
-  "description": "Generate Chinese-English bilingual subtitles on YouTube with configurable translation APIs.",
+  "description": "AI-powered bilingual subtitle translator for YouTube.",
   "permissions": ["storage"],
   "host_permissions": [
     "https://www.youtube.com/*",
@@ -29,6 +29,6 @@
   ],
   "options_page": "options/options.html",
   "action": {
-    "default_title": "YouTube Bilingual Subtitles"
+    "default_title": "ytb-ai-bilingual-translator"
   }
 }

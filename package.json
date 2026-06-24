@@ -1,8 +1,8 @@
 {
-  "name": "youtube-bilingual-deepseek-subtitles",
+  "name": "ytb-ai-bilingual-translator",
   "version": "0.1.0",
   "private": true,
-  "description": "Chrome MV3 extension for YouTube bilingual subtitles using DeepSeek.",
+  "description": "AI-powered bilingual subtitle translator for YouTube.",
   "scripts": {
     "test": "node --test"
   },

@@ -1,4 +1,4 @@
-# YouTube Bilingual API Subtitles
+# ytb-ai-bilingual-translator
 
 Chrome MV3 extension that reads YouTube's available English caption track, merges fragmented captions into readable sentence-like cues, pre-translates them with a configurable translation API, and renders a custom Chinese-English subtitle overlay while hiding YouTube's native CC window.
 
