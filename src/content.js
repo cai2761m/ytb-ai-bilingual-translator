@@ -7,6 +7,20 @@
   const MAX_PARALLEL_BATCHES = 2;
   const PRIORITY_WINDOW_MS = 120000;
   const URGENT_RESCHEDULE_MS = 1000;
+  const NATIVE_CAPTION_SELECTOR = [
+    ".ytp-caption-window-container",
+    ".ytp-caption-window-rollup",
+    ".ytp-caption-window-bottom",
+    ".ytp-caption-window-top",
+    ".caption-window",
+    ".captions-text",
+    ".caption-visual-line",
+    ".ytp-caption-segment",
+    ".html5-video-player [class*='caption' i]",
+    ".html5-video-player [id*='caption' i]",
+    ".html5-video-player [class*='subtitle' i]",
+    ".html5-video-player [id*='subtitle' i]"
+  ].join(",");
 
   const state = {
     settings: Object.assign({}, Core.DEFAULT_SETTINGS),
@@ -24,6 +38,9 @@
     overlay: null,
     overlayParts: null,
     video: null,
+    nativeCaptionObserver: null,
+    lastNativeCaptionSweepAt: 0,
+    lastNativeCaptionDisableRequestAt: 0,
     lastUrgentScheduleAt: 0,
     bridgeInjected: false,
     pumping: false
@@ -37,7 +54,10 @@
     injectPageBridge();
     bindPageMessages();
     bindStorageChanges();
+    startNativeCaptionBlocker();
     setInterval(watchVideoElement, 1000);
+    setInterval(() => updateNativeCaptionBlocking(true), 500);
+    setInterval(() => requestDisableNativeCaptions(false), 1000);
     setInterval(() => {
       if (state.cues.length) {
         scheduleTranslations(getCurrentTimeMs(), false);
@@ -108,6 +128,7 @@
       "ytbt-hide-native-captions",
       Boolean(state.settings.subtitleEnabled)
     );
+    updateNativeCaptionBlocking(true);
 
     if (state.overlay) {
       state.overlay.style.setProperty("--ytbt-font-scale", String(state.settings.fontScale));
@@ -814,6 +835,7 @@
     if (state.video) {
       state.video.addEventListener("seeked", handleSeek);
       state.video.addEventListener("loadedmetadata", handleSeek);
+      disableBrowserTextTracks();
     }
   }
 
@@ -831,8 +853,249 @@
 
   function renderLoop() {
     ensureOverlay();
+    updateNativeCaptionBlocking();
     updateOverlay();
     requestAnimationFrame(renderLoop);
+  }
+
+  function startNativeCaptionBlocker() {
+    if (state.nativeCaptionObserver) {
+      return;
+    }
+
+    state.nativeCaptionObserver = new MutationObserver((mutations) => {
+      if (!state.settings.subtitleEnabled) {
+        return;
+      }
+
+      for (const mutation of mutations) {
+        if (mutation.type !== "childList") {
+          continue;
+        }
+        for (const node of mutation.addedNodes) {
+          hideNativeCaptionNodeTree(node);
+        }
+      }
+    });
+
+    const root = document.documentElement || document.body;
+    if (root) {
+      state.nativeCaptionObserver.observe(root, {
+        childList: true,
+        subtree: true
+      });
+    }
+    updateNativeCaptionBlocking(true);
+  }
+
+  function updateNativeCaptionBlocking(force) {
+    if (!force && Date.now() - state.lastNativeCaptionSweepAt < 250) {
+      return;
+    }
+    state.lastNativeCaptionSweepAt = Date.now();
+
+    if (state.settings.subtitleEnabled) {
+      requestDisableNativeCaptions(Boolean(force));
+      hideNativeCaptionNodeTree(document);
+      hideCaptionLikePlayerOverlays();
+      disableBrowserTextTracks();
+    } else {
+      restoreNativeCaptionNodes();
+    }
+  }
+
+  function hideNativeCaptionNodeTree(root) {
+    if (!root || !state.settings.subtitleEnabled) {
+      return;
+    }
+
+    const nodes = [];
+    if (root.nodeType === Node.ELEMENT_NODE && root.matches && root.matches(NATIVE_CAPTION_SELECTOR)) {
+      nodes.push(root);
+    }
+    if (root.querySelectorAll) {
+      nodes.push(...root.querySelectorAll(NATIVE_CAPTION_SELECTOR));
+    }
+
+    for (const node of nodes) {
+      if (state.overlay && (node === state.overlay || state.overlay.contains(node))) {
+        continue;
+      }
+      node.dataset.ytbtNativeCaptionHidden = "true";
+      node.style.setProperty("display", "none", "important");
+      node.style.setProperty("visibility", "hidden", "important");
+      node.style.setProperty("opacity", "0", "important");
+      node.style.setProperty("pointer-events", "none", "important");
+    }
+  }
+
+  function hideCaptionLikePlayerOverlays() {
+    const player = document.querySelector(".html5-video-player") || document.querySelector("#movie_player");
+    if (!player) {
+      return;
+    }
+
+    const playerRect = player.getBoundingClientRect();
+    if (!playerRect.width || !playerRect.height) {
+      return;
+    }
+
+    const candidates = new Set([
+      ...player.querySelectorAll("div, span, p"),
+      ...document.querySelectorAll(
+        "body div[style], body span[style], body p[style], body [class*='caption' i], body [class*='subtitle' i]"
+      )
+    ]);
+    for (const node of candidates) {
+      if (!isLikelyNativeCaptionOverlay(node, playerRect)) {
+        continue;
+      }
+      node.dataset.ytbtNativeCaptionHidden = "true";
+      node.style.setProperty("display", "none", "important");
+      node.style.setProperty("visibility", "hidden", "important");
+      node.style.setProperty("opacity", "0", "important");
+      node.style.setProperty("pointer-events", "none", "important");
+    }
+  }
+
+  function isLikelyNativeCaptionOverlay(node, playerRect) {
+    if (!node || !state.settings.subtitleEnabled) {
+      return false;
+    }
+    if (node.closest(".ytbt-overlay")) {
+      return false;
+    }
+    if (node.closest("#masthead, ytd-app, ytd-watch-metadata, ytd-comments, ytd-engagement-panel-section-list-renderer") && !node.closest(".html5-video-player, #movie_player")) {
+      return false;
+    }
+    if (node.closest(".ytp-chrome-bottom, .ytp-chrome-top, .ytp-gradient-bottom, .ytp-gradient-top, .ytp-progress-bar-container, .ytp-tooltip, .ytp-popup, .ytp-ce-element")) {
+      return false;
+    }
+    if (node.querySelector("button, a, svg, input, textarea, select")) {
+      return false;
+    }
+
+    const text = (node.textContent || "").replace(/\s+/g, " ").trim();
+    if (text.length < 18) {
+      return false;
+    }
+
+    const rect = node.getBoundingClientRect();
+    if (!rect.width || !rect.height) {
+      return false;
+    }
+    if (!rectOverlapsPlayer(rect, playerRect)) {
+      return false;
+    }
+    if (rect.width < playerRect.width * 0.18 || rect.height < 12) {
+      return false;
+    }
+    if (rect.bottom < playerRect.top + playerRect.height * 0.32) {
+      return false;
+    }
+
+    const style = window.getComputedStyle(node);
+    const positionLooksOverlay = style.position === "absolute" || style.position === "fixed";
+    const highLayer = Number.parseInt(style.zIndex, 10);
+    const fontSize = Number.parseFloat(style.fontSize);
+    const hasCaptionishStyle =
+      style.textShadow !== "none" ||
+      style.backgroundColor !== "rgba(0, 0, 0, 0)" ||
+      style.webkitTextStrokeWidth !== "0px" ||
+      textLooksLikeActiveCue(text);
+
+    return (
+      (positionLooksOverlay || textLooksLikeActiveCue(text)) &&
+      (Number.isFinite(highLayer) ? highLayer >= 0 : true) &&
+      Number.isFinite(fontSize) &&
+      fontSize >= 12 &&
+      hasCaptionishStyle
+    );
+  }
+
+  function rectOverlapsPlayer(rect, playerRect) {
+    const horizontallyOverlaps = rect.right > playerRect.left && rect.left < playerRect.right;
+    const verticallyOverlaps = rect.bottom > playerRect.top + playerRect.height * 0.25 && rect.top < playerRect.bottom;
+    return horizontallyOverlaps && verticallyOverlaps;
+  }
+
+  function textLooksLikeActiveCue(text) {
+    const cue = Core.findCueAtTime(state.cues, getCurrentTimeMs());
+    if (!cue) {
+      return false;
+    }
+
+    const normalizedText = Core.normalizeSubtitleText(text).toLowerCase();
+    const sourceText = Core.normalizeSubtitleText(cue.displaySourceText || cue.sourceText || "").toLowerCase();
+    const translatedText = Core.normalizeSubtitleText(cue.translatedText || "").toLowerCase();
+
+    return textPairLooksRelated(normalizedText, sourceText) || textPairLooksRelated(normalizedText, translatedText);
+  }
+
+  function textPairLooksRelated(left, right) {
+    if (!left || !right) {
+      return false;
+    }
+
+    const shorter = left.length <= right.length ? left : right;
+    const longer = left.length > right.length ? left : right;
+    if (shorter.length < 12) {
+      return false;
+    }
+
+    return longer.includes(shorter.slice(0, Math.min(48, shorter.length)));
+  }
+
+  function restoreNativeCaptionNodes() {
+    for (const node of document.querySelectorAll('[data-ytbt-native-caption-hidden="true"]')) {
+      delete node.dataset.ytbtNativeCaptionHidden;
+      node.style.removeProperty("display");
+      node.style.removeProperty("visibility");
+      node.style.removeProperty("opacity");
+      node.style.removeProperty("pointer-events");
+    }
+  }
+
+  function requestDisableNativeCaptions(force) {
+    if (!state.settings.subtitleEnabled) {
+      return;
+    }
+
+    const now = Date.now();
+    if (!force && now - state.lastNativeCaptionDisableRequestAt < 900) {
+      return;
+    }
+    state.lastNativeCaptionDisableRequestAt = now;
+
+    try {
+      const subtitleButton = document.querySelector(".ytp-subtitles-button");
+      if (subtitleButton && subtitleButton.getAttribute("aria-pressed") === "true") {
+        subtitleButton.click();
+      }
+    } catch (error) {
+      // Ignore transient YouTube UI state.
+    }
+
+    window.postMessage(
+      {
+        channel: CHANNEL,
+        type: "DISABLE_NATIVE_CAPTIONS"
+      },
+      window.location.origin
+    );
+  }
+
+  function disableBrowserTextTracks() {
+    const video = state.video || document.querySelector("video");
+    if (!video || !video.textTracks) {
+      return;
+    }
+
+    for (const track of video.textTracks) {
+      if (track && track.mode !== "disabled") {
+        track.mode = "disabled";
+      }
+    }
   }
 
   function ensureOverlay() {

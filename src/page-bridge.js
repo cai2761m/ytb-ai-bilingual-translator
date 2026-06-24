@@ -96,6 +96,39 @@
     };
   }
 
+  function disableNativeCaptions() {
+    const player = document.querySelector("#movie_player");
+    const subtitleButton = document.querySelector(".ytp-subtitles-button");
+
+    try {
+      if (subtitleButton && subtitleButton.getAttribute("aria-pressed") === "true") {
+        subtitleButton.click();
+      }
+    } catch (error) {
+      // Ignore page UI races.
+    }
+
+    if (!player) {
+      return;
+    }
+
+    const calls = [
+      () => player.unloadModule && player.unloadModule("captions"),
+      () => player.setOption && player.setOption("captions", "track", {}),
+      () => player.setOption && player.setOption("captions", "track", null),
+      () => player.setOption && player.setOption("captions", "track", undefined),
+      () => player.updateSubtitlesUserSettings && player.updateSubtitlesUserSettings({ track: null })
+    ];
+
+    for (const call of calls) {
+      try {
+        call();
+      } catch (error) {
+        // YouTube changes these internal player APIs frequently.
+      }
+    }
+  }
+
   function emitPlayerResponse() {
     const response = readPlayerResponse();
     const tracks =
@@ -156,6 +189,15 @@
   window.addEventListener("yt-navigate-finish", () => setTimeout(emitPlayerResponse, 250));
   window.addEventListener("yt-page-data-updated", () => setTimeout(emitPlayerResponse, 250));
   window.addEventListener("popstate", () => setTimeout(emitPlayerResponse, 250));
+  window.addEventListener("message", (event) => {
+    if (event.source !== window || event.origin !== window.location.origin) {
+      return;
+    }
+    const data = event.data;
+    if (data && data.channel === CHANNEL && data.type === "DISABLE_NATIVE_CAPTIONS") {
+      disableNativeCaptions();
+    }
+  });
   document.addEventListener("readystatechange", emitPlayerResponse);
   setInterval(emitPlayerResponse, 1500);
   emitPlayerResponse();
