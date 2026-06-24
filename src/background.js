@@ -229,9 +229,12 @@ async function translateBatch({ translationConfig, sourceLanguage, targetLanguag
   const sourcePolishInstruction = asrCorrectionEnabled
     ? "Before translating, correct only obvious ASR recognition mistakes in the source using nearby batch context: wrong homophones, broken word boundaries, missing small words, and clear recognition errors. Preserve technical terms, names, code identifiers, acronyms, numbers, and uncertain words exactly when unsure. "
     : "Do not rewrite the source words for ASR correction; only restore natural punctuation and capitalization. ";
+  const mergeInstruction =
+    "CRITICAL: Subtitles are often broken into incomplete fragments across multiple ids. You must mentally merge these fragments into structurally complete and readable sentences. For all ids that belong to the same merged sentence, return the exact same complete merged sentence in both `displaySourceText` and `translatedText`. Do not return fragmented text. ";
   const systemPrompt =
     `You are a subtitle translation engine. Translate ${sourceLabel} subtitles into natural ${targetLabel}. ` +
     sourcePolishInstruction +
+    mergeInstruction +
     "Keep meaning concise for on-screen reading. The displaySourceText field must contain the polished source subtitle, and translatedText must translate that polished meaning. " +
     "Return exactly one item for every input id and never skip ids. " +
     "Output json only in this exact format: " +
