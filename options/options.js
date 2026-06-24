@@ -24,8 +24,8 @@
     const config = Core.resolveTranslationConfig(settings);
     translationProvider.value = config.provider;
     apiKeyInput.value = settings.translationApiKey || settings.deepseekApiKey || "";
-    translationBaseUrl.value = settings.translationBaseUrl || (config.provider === "deepseek" ? Core.DEEPSEEK_BASE_URL : "");
-    translationModel.value = settings.translationModel || (config.provider === "deepseek" ? Core.DEEPSEEK_MODEL : "");
+    translationBaseUrl.value = settings.translationBaseUrl || config.baseUrl || "";
+    translationModel.value = settings.translationModel || config.model || "";
     translationJsonResponse.checked = settings.translationJsonResponse !== false;
     asrCorrectionEnabled.checked = settings.asrCorrectionEnabled !== false;
     sourceLanguage.value = settings.sourceLanguage || Core.DEFAULT_SETTINGS.sourceLanguage;
@@ -91,7 +91,13 @@
     if (translationProvider.value === "deepseek") {
       translationBaseUrl.value = Core.DEEPSEEK_BASE_URL;
       translationModel.value = Core.DEEPSEEK_MODEL;
+    } else if (translationProvider.value === "gemini") {
+      translationBaseUrl.value = Core.GEMINI_BASE_URL;
+      translationModel.value = Core.GEMINI_MODEL;
     } else if (translationBaseUrl.value.trim() === Core.DEEPSEEK_BASE_URL) {
+      translationBaseUrl.value = "";
+      translationModel.value = "";
+    } else if (translationBaseUrl.value.trim() === Core.GEMINI_BASE_URL) {
       translationBaseUrl.value = "";
       translationModel.value = "";
     }
@@ -102,6 +108,9 @@
     if (translationProvider.value === "deepseek") {
       translationBaseUrl.placeholder = Core.DEEPSEEK_BASE_URL;
       translationModel.placeholder = Core.DEEPSEEK_MODEL;
+    } else if (translationProvider.value === "gemini") {
+      translationBaseUrl.placeholder = Core.GEMINI_BASE_URL;
+      translationModel.placeholder = Core.GEMINI_MODEL;
     } else {
       translationBaseUrl.placeholder = "https://api.example.com/v1";
       translationModel.placeholder = "model-name";

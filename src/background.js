@@ -62,7 +62,11 @@ async function handleTranslateBatch(message) {
     };
   }
 
-  if (!translationConfig.chatCompletionsUrl || !translationConfig.model) {
+  const endpointUrl =
+    translationConfig.apiStyle === "gemini"
+      ? translationConfig.generateContentUrl
+      : translationConfig.chatCompletionsUrl;
+  if (!endpointUrl || !translationConfig.model) {
     return {
       type: "TRANSLATE_RESULT",
       ok: false,
@@ -78,7 +82,7 @@ async function handleTranslateBatch(message) {
     message.videoId || "",
     message.trackFingerprint || "",
     translationConfig.provider,
-    translationConfig.chatCompletionsUrl,
+    endpointUrl,
     translationConfig.model,
     targetLanguage,
     Core.MERGE_VERSION,
@@ -190,14 +194,30 @@ async function translateWithRetry(request) {
         throw error;
       }
       if (attempt < MAX_RETRIES) {
-        // 429 / rate-limit benefits from a longer first backoff so the upstream
-        // quota window can recover before we hammer it again.
-        const base = /429|rate limit|too many requests/i.test(message) ? 2000 : 500;
-        await delay(base * Math.pow(2, attempt));
+        const retryDelayMs = retryDelayForError(message, request.translationConfig, attempt);
+        if (!retryDelayMs) {
+          throw error;
+        }
+        await delay(retryDelayMs);
       }
     }
   }
   throw lastError;
+}
+
+function retryDelayForError(message, translationConfig, attempt) {
+  const text = String(message || "");
+  if (translationConfig && translationConfig.apiStyle === "gemini") {
+    if (/429|TooManyRequests|too many requests|rate limit/i.test(text)) {
+      return 0;
+    }
+    if (/503|ServiceUnavailable|unavailable/i.test(text)) {
+      return 8000 * Math.pow(2, attempt);
+    }
+  }
+
+  const base = /429|rate limit|too many requests/i.test(text) ? 15000 : 500;
+  return base * Math.pow(2, attempt);
 }
 
 async function translateBatch({ translationConfig, sourceLanguage, targetLanguage, asrCorrectionEnabled, cues }) {
@@ -209,68 +229,128 @@ async function translateBatch({ translationConfig, sourceLanguage, targetLanguag
   const sourcePolishInstruction = asrCorrectionEnabled
     ? "Before translating, correct only obvious ASR recognition mistakes in the source using nearby batch context: wrong homophones, broken word boundaries, missing small words, and clear recognition errors. Preserve technical terms, names, code identifiers, acronyms, numbers, and uncertain words exactly when unsure. "
     : "Do not rewrite the source words for ASR correction; only restore natural punctuation and capitalization. ";
-
-  const payload = {
-    model: translationConfig.model,
-    messages: [
-      {
-        role: "system",
-        content:
-          `You are a subtitle translation engine. Translate ${sourceLabel} subtitles into natural ${targetLabel}. ` +
-          sourcePolishInstruction +
-          "Keep meaning concise for on-screen reading. The displaySourceText field must contain the polished source subtitle, and translatedText must translate that polished meaning. " +
-          "Return exactly one item for every input id and never skip ids. " +
-          "Output json only in this exact format: " +
-          "{\"items\":[{\"id\":\"0\",\"translatedText\":\"...\",\"displaySourceText\":\"...\"}]}. Do not add commentary."
-      },
-      {
-        role: "user",
-        content: JSON.stringify({
-          sourceLanguage,
-          targetLanguage,
-          asrCorrectionEnabled: Boolean(asrCorrectionEnabled),
-          items: cues.map((cue) => ({ id: String(cue.id), text: cue.sourceText }))
-        })
-      }
-    ],
-    stream: false,
-    temperature: 0.1,
-    max_tokens: maxTokens
+  const systemPrompt =
+    `You are a subtitle translation engine. Translate ${sourceLabel} subtitles into natural ${targetLabel}. ` +
+    sourcePolishInstruction +
+    "Keep meaning concise for on-screen reading. The displaySourceText field must contain the polished source subtitle, and translatedText must translate that polished meaning. " +
+    "Return exactly one item for every input id and never skip ids. " +
+    "Output json only in this exact format: " +
+    "{\"items\":[{\"id\":\"0\",\"translatedText\":\"...\",\"displaySourceText\":\"...\"}]}. Do not add commentary.";
+  const userPayload = {
+    sourceLanguage,
+    targetLanguage,
+    asrCorrectionEnabled: Boolean(asrCorrectionEnabled),
+    items: cues.map((cue) => ({ id: String(cue.id), text: cue.sourceText }))
   };
 
-  if (translationConfig.useJsonResponseFormat) {
-    payload.response_format = { type: "json_object" };
-  }
-  if (translationConfig.includeDeepSeekThinkingFlag) {
-    payload.thinking = { type: "disabled" };
-  }
+  let content = "";
+  let finishReason = "";
 
-  const response = await fetchWithTimeout(translationConfig.chatCompletionsUrl, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${translationConfig.apiKey}`
-    },
-    body: JSON.stringify(payload)
-  });
+  if (translationConfig.apiStyle === "gemini") {
+    const payload = {
+      systemInstruction: {
+        parts: [{ text: systemPrompt }]
+      },
+      contents: [
+        {
+          role: "user",
+          parts: [{ text: JSON.stringify(userPayload) }]
+        }
+      ],
+      generationConfig: {
+        temperature: 0.1,
+        maxOutputTokens: maxTokens
+      }
+    };
 
-  const bodyText = await response.text();
-  if (!response.ok) {
-    throw new Error(`${translationConfig.providerLabel} request failed (${response.status}): ${bodyText.slice(0, 300)}`);
+    if (translationConfig.useJsonResponseFormat) {
+      payload.generationConfig.responseMimeType = "application/json";
+    }
+
+    const response = await fetchWithTimeout(
+      withApiKeyQuery(translationConfig.generateContentUrl, translationConfig.apiKey),
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(payload)
+      }
+    );
+
+    const bodyText = await response.text();
+    if (!response.ok) {
+      throw new Error(formatProviderRequestError(translationConfig.providerLabel, response.status, bodyText));
+    }
+
+    let body;
+    try {
+      body = JSON.parse(bodyText);
+    } catch (error) {
+      throw new Error(`${translationConfig.providerLabel} returned non-JSON response.`);
+    }
+
+    const candidate = body && body.candidates && body.candidates[0];
+    finishReason = candidate && candidate.finishReason;
+    content = extractGeminiCandidateText(candidate);
+    if (!content && body && body.promptFeedback && body.promptFeedback.blockReason) {
+      throw new Error(`${translationConfig.providerLabel} returned empty content (${body.promptFeedback.blockReason}).`);
+    } else if (!content && finishReason) {
+      throw new Error(`${translationConfig.providerLabel} returned empty content (finish_reason=${finishReason}).`);
+    }
+  } else {
+    const payload = {
+      model: translationConfig.model,
+      messages: [
+        {
+          role: "system",
+          content: systemPrompt
+        },
+        {
+          role: "user",
+          content: JSON.stringify(userPayload)
+        }
+      ],
+      stream: false,
+      temperature: 0.1,
+      max_tokens: maxTokens
+    };
+
+    if (translationConfig.useJsonResponseFormat) {
+      payload.response_format = { type: "json_object" };
+    }
+    if (translationConfig.includeDeepSeekThinkingFlag) {
+      payload.thinking = { type: "disabled" };
+    }
+
+    const response = await fetchWithTimeout(translationConfig.chatCompletionsUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${translationConfig.apiKey}`
+      },
+      body: JSON.stringify(payload)
+    });
+
+    const bodyText = await response.text();
+    if (!response.ok) {
+      throw new Error(formatProviderRequestError(translationConfig.providerLabel, response.status, bodyText));
+    }
+
+    let body;
+    try {
+      body = JSON.parse(bodyText);
+    } catch (error) {
+      throw new Error(`${translationConfig.providerLabel} returned non-JSON response.`);
+    }
+
+    const choice = body && body.choices && body.choices[0];
+    content =
+      choice &&
+      choice.message &&
+      choice.message.content;
+    finishReason = choice && choice.finish_reason;
   }
-
-  let body;
-  try {
-    body = JSON.parse(bodyText);
-  } catch (error) {
-    throw new Error(`${translationConfig.providerLabel} returned non-JSON response.`);
-  }
-
-  const choice = body && body.choices && body.choices[0];
-  const content =
-    choice &&
-    choice.message &&
-    choice.message.content;
 
   if (!content) {
     throw new Error(`${translationConfig.providerLabel} returned empty content.`);
@@ -278,9 +358,9 @@ async function translateBatch({ translationConfig, sourceLanguage, targetLanguag
 
   // Detect token-limit truncation so the caller can shrink the batch and retry,
   // instead of silently dropping cues and entering per-cue retry loops.
-  if (choice && choice.finish_reason === "length") {
+  if (finishReason === "length" || finishReason === "MAX_TOKENS") {
     throw new Error(
-      `${translationConfig.providerLabel} response truncated (finish_reason=length); will retry in smaller batches.`
+      `${translationConfig.providerLabel} response truncated (finish_reason=${finishReason}); will retry in smaller batches.`
     );
   }
 
@@ -293,6 +373,54 @@ async function translateBatch({ translationConfig, sourceLanguage, targetLanguag
   }
 
   return filtered;
+}
+
+function withApiKeyQuery(url, apiKey) {
+  const separator = String(url || "").includes("?") ? "&" : "?";
+  return `${url}${separator}key=${encodeURIComponent(apiKey)}`;
+}
+
+function formatProviderRequestError(providerLabel, status, bodyText) {
+  const detail = extractProviderErrorMessage(bodyText);
+  return `${providerLabel} request failed (${status}): ${detail}`;
+}
+
+function extractProviderErrorMessage(bodyText) {
+  const text = String(bodyText || "").trim();
+  if (!text) {
+    return "empty error response";
+  }
+
+  try {
+    const body = JSON.parse(text);
+    const error = body && body.error;
+    if (error && typeof error.message === "string") {
+      return error.message.slice(0, 300);
+    }
+    if (error && typeof error.status === "string") {
+      return error.status.slice(0, 300);
+    }
+    if (body && body.promptFeedback && body.promptFeedback.blockReason) {
+      return String(body.promptFeedback.blockReason).slice(0, 300);
+    }
+  } catch (error) {
+    // Fall back to the raw text below.
+  }
+
+  return text.slice(0, 300);
+}
+
+function extractGeminiCandidateText(candidate) {
+  const parts =
+    candidate &&
+    candidate.content &&
+    Array.isArray(candidate.content.parts)
+      ? candidate.content.parts
+      : [];
+  return parts
+    .map((part) => (part && typeof part.text === "string" ? part.text : ""))
+    .join("")
+    .trim();
 }
 
 function fetchWithTimeout(url, options) {

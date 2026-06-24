@@ -240,6 +240,12 @@ test("parseDeepSeekTranslationContent accepts common JSON shapes", () => {
     ),
     [{ id: "3", translatedText: "translated", displaySourceText: "Hello world." }]
   );
+  assert.deepEqual(
+    Core.parseDeepSeekTranslationContent(
+      '```json\n{"items":[{"id":"4","translatedText":"ok","displaySourceText":"it works"}]}\n```'
+    ),
+    [{ id: "4", translatedText: "ok", displaySourceText: "It works." }]
+  );
 });
 
 test("cache keys are stable and namespaced", () => {
@@ -281,10 +287,63 @@ test("resolveTranslationConfig supports custom OpenAI-compatible API", () => {
   assert.equal(config.includeDeepSeekThinkingFlag, false);
 });
 
+test("resolveTranslationConfig supports Gemini API", () => {
+  const config = Core.resolveTranslationConfig({
+    translationProvider: "gemini",
+    translationApiKey: "gemini-key"
+  });
+
+  assert.equal(config.provider, "gemini");
+  assert.equal(config.providerLabel, "Gemini");
+  assert.equal(config.apiStyle, "gemini");
+  assert.equal(config.apiKey, "gemini-key");
+  assert.equal(config.baseUrl, Core.GEMINI_BASE_URL);
+  assert.equal(config.model, Core.GEMINI_MODEL);
+  assert.equal(config.chatCompletionsUrl, "");
+  assert.equal(
+    config.generateContentUrl,
+    `${Core.GEMINI_BASE_URL}/models/${Core.GEMINI_MODEL}:generateContent`
+  );
+});
+
+test("resolveTranslationConfig ignores stale provider defaults after switching to Gemini", () => {
+  const config = Core.resolveTranslationConfig({
+    translationProvider: "gemini",
+    translationApiKey: "gemini-key",
+    translationBaseUrl: Core.DEEPSEEK_BASE_URL,
+    translationModel: Core.DEEPSEEK_MODEL
+  });
+
+  assert.equal(config.baseUrl, Core.GEMINI_BASE_URL);
+  assert.equal(config.model, Core.GEMINI_MODEL);
+  assert.equal(
+    config.generateContentUrl,
+    `${Core.GEMINI_BASE_URL}/models/${Core.GEMINI_MODEL}:generateContent`
+  );
+});
+
 test("buildChatCompletionsUrl accepts full endpoint URLs", () => {
   assert.equal(
     Core.buildChatCompletionsUrl("https://api.example.com/v1/chat/completions"),
     "https://api.example.com/v1/chat/completions"
+  );
+});
+
+test("buildGeminiGenerateContentUrl accepts plain and prefixed model names", () => {
+  assert.equal(
+    Core.buildGeminiGenerateContentUrl(Core.GEMINI_BASE_URL, "gemini-3.5-flash"),
+    `${Core.GEMINI_BASE_URL}/models/gemini-3.5-flash:generateContent`
+  );
+  assert.equal(
+    Core.buildGeminiGenerateContentUrl(Core.GEMINI_BASE_URL, "models/gemini-3.5-flash"),
+    `${Core.GEMINI_BASE_URL}/models/gemini-3.5-flash:generateContent`
+  );
+  assert.equal(
+    Core.buildGeminiGenerateContentUrl(
+      `${Core.GEMINI_BASE_URL}/models/gemini-3.5-flash:generateContent`,
+      "ignored"
+    ),
+    `${Core.GEMINI_BASE_URL}/models/gemini-3.5-flash:generateContent`
   );
 });
 
@@ -302,7 +361,9 @@ test("sourceLanguageLabel and targetLanguageLabel resolve known and regional cod
 
 test("classifyTranslationError marks transient failures as retryable", () => {
   assert.equal(Core.classifyTranslationError("request failed (429): too many requests"), "retryable");
+  assert.equal(Core.classifyTranslationError("Gemini request failed (429): TooManyRequests"), "retryable");
   assert.equal(Core.classifyTranslationError("rate limit exceeded"), "retryable");
+  assert.equal(Core.classifyTranslationError("Gemini request failed (503): ServiceUnavailable"), "retryable");
   assert.equal(Core.classifyTranslationError("DeepSeek request failed (503): unavailable"), "retryable");
   assert.equal(Core.classifyTranslationError("timeout"), "retryable");
   assert.equal(Core.classifyTranslationError("failed to fetch"), "retryable");

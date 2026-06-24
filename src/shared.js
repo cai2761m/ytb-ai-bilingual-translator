@@ -19,8 +19,10 @@
   });
 
   const DEEPSEEK_MODEL = "deepseek-v4-flash";
+  const GEMINI_MODEL = "gemini-3.5-flash";
   const MERGE_VERSION = "1";
   const DEEPSEEK_BASE_URL = "https://api.deepseek.com";
+  const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
 
   // Upper bound on the number of cached cue translations. Each `ytbt:` storage
   // key holds an entire video; once this many cached cues accumulate, the
@@ -676,31 +678,106 @@
     return /\/chat\/completions$/i.test(trimmed) ? trimmed : `${trimmed}/chat/completions`;
   }
 
+  function buildGeminiGenerateContentUrl(baseUrl, model) {
+    const rawBaseUrl = String(baseUrl || "").trim();
+    const rawModel = String(model || "").trim().replace(/^\/+/, "");
+    if (!rawBaseUrl || !rawModel) {
+      return "";
+    }
+
+    const trimmedBaseUrl = rawBaseUrl.replace(/\/+$/, "");
+    if (/:generateContent$/i.test(trimmedBaseUrl)) {
+      return trimmedBaseUrl;
+    }
+
+    const modelPath = /^(models|tunedModels)\//.test(rawModel) ? rawModel : `models/${rawModel}`;
+    const encodedModelPath = modelPath.split("/").map(encodeURIComponent).join("/");
+    return `${trimmedBaseUrl}/${encodedModelPath}:generateContent`;
+  }
+
   function resolveTranslationConfig(settings) {
     const source = Object.assign({}, DEFAULT_SETTINGS, settings || {});
-    const provider = source.translationProvider === "custom" ? "custom" : "deepseek";
+    const provider =
+      source.translationProvider === "custom" || source.translationProvider === "gemini"
+        ? source.translationProvider
+        : "deepseek";
     const apiKey = String(source.translationApiKey || source.deepseekApiKey || "").trim();
-    const baseUrl = String(
-      source.translationBaseUrl || (provider === "deepseek" ? DEEPSEEK_BASE_URL : "")
-    ).trim();
-    const model = String(
-      source.translationModel || (provider === "deepseek" ? DEEPSEEK_MODEL : "")
-    ).trim();
+    const rawBaseUrl = String(source.translationBaseUrl || "").trim();
+    const rawModel = String(source.translationModel || "").trim();
+    let baseUrl =
+      rawBaseUrl ||
+      (provider === "deepseek" ? DEEPSEEK_BASE_URL : provider === "gemini" ? GEMINI_BASE_URL : "");
+    let model =
+      rawModel ||
+      (provider === "deepseek" ? DEEPSEEK_MODEL : provider === "gemini" ? GEMINI_MODEL : "");
+
+    if (provider === "gemini") {
+      if (baseUrl === DEEPSEEK_BASE_URL || /\/chat\/completions$/i.test(baseUrl)) {
+        baseUrl = GEMINI_BASE_URL;
+      }
+      if (model === DEEPSEEK_MODEL) {
+        model = GEMINI_MODEL;
+      }
+    } else if (provider === "deepseek") {
+      if (baseUrl === GEMINI_BASE_URL || /:generateContent$/i.test(baseUrl)) {
+        baseUrl = DEEPSEEK_BASE_URL;
+      }
+      if (model === GEMINI_MODEL) {
+        model = DEEPSEEK_MODEL;
+      }
+    }
+
+    const apiStyle = provider === "gemini" ? "gemini" : "chat-completions";
 
     return {
       provider,
-      providerLabel: provider === "deepseek" ? "DeepSeek" : "Custom API",
+      providerLabel: provider === "deepseek" ? "DeepSeek" : provider === "gemini" ? "Gemini" : "Custom API",
+      apiStyle,
       apiKey,
       baseUrl,
-      chatCompletionsUrl: buildChatCompletionsUrl(baseUrl),
+      chatCompletionsUrl: apiStyle === "chat-completions" ? buildChatCompletionsUrl(baseUrl) : "",
+      generateContentUrl: apiStyle === "gemini" ? buildGeminiGenerateContentUrl(baseUrl, model) : "",
       model,
       useJsonResponseFormat: source.translationJsonResponse !== false,
       includeDeepSeekThinkingFlag: provider === "deepseek"
     };
   }
 
+  function parseLooseJsonContent(content) {
+    if (typeof content !== "string") {
+      return content;
+    }
+
+    const raw = content.trim();
+    try {
+      return JSON.parse(raw);
+    } catch (error) {
+      // Some providers still wrap JSON in markdown fences when JSON mode is
+      // disabled or unsupported.
+    }
+
+    const fenced = raw.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+    if (fenced) {
+      return JSON.parse(fenced[1].trim());
+    }
+
+    const firstObject = raw.indexOf("{");
+    const lastObject = raw.lastIndexOf("}");
+    if (firstObject >= 0 && lastObject > firstObject) {
+      return JSON.parse(raw.slice(firstObject, lastObject + 1));
+    }
+
+    const firstArray = raw.indexOf("[");
+    const lastArray = raw.lastIndexOf("]");
+    if (firstArray >= 0 && lastArray > firstArray) {
+      return JSON.parse(raw.slice(firstArray, lastArray + 1));
+    }
+
+    return JSON.parse(raw);
+  }
+
   function parseDeepSeekTranslationContent(content) {
-    const parsed = typeof content === "string" ? JSON.parse(content) : content;
+    const parsed = parseLooseJsonContent(content);
     const items = [];
 
     if (Array.isArray(parsed)) {
@@ -752,7 +829,9 @@
   const api = {
     DEFAULT_SETTINGS,
     DEEPSEEK_MODEL,
+    GEMINI_MODEL,
     DEEPSEEK_BASE_URL,
+    GEMINI_BASE_URL,
     MERGE_VERSION,
     DEFAULT_CACHE_MAX_ITEMS,
     decodeHtmlEntities,
@@ -772,6 +851,7 @@
     fingerprintText,
     makeCacheKey,
     buildChatCompletionsUrl,
+    buildGeminiGenerateContentUrl,
     resolveTranslationConfig,
     parseDeepSeekTranslationContent
   };

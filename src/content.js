@@ -4,11 +4,17 @@
   const Core = globalThis.YTBTCore;
   const CHANNEL = "__ytbt_player_response__";
   const BATCH_SIZE = 30;
+  const GEMINI_BATCH_SIZE = 8;
   const RETRY_BATCH_SIZE = 5;
+  const GEMINI_RETRY_BATCH_SIZE = 3;
   const MAX_CUE_TRANSLATION_RETRIES = 2;
   const MAX_PARALLEL_BATCHES = 2;
+  const GEMINI_MAX_PARALLEL_BATCHES = 1;
   const PRIORITY_WINDOW_MS = 120000;
   const URGENT_RESCHEDULE_MS = 1000;
+  const RATE_LIMIT_BACKOFF_MS = 60000;
+  const SERVICE_BACKOFF_MS = 30000;
+  const DEFAULT_API_BACKOFF_MS = 10000;
   const DRAG_LONG_PRESS_MS = 220;
   const DRAG_EDGE_PADDING_PX = 12;
   const NATIVE_CAPTION_SELECTOR = [
@@ -57,6 +63,9 @@
     lastNativeCaptionSweepAt: 0,
     lastNativeCaptionDisableRequestAt: 0,
     lastUrgentScheduleAt: 0,
+    apiBackoffUntil: 0,
+    apiBackoffMessage: "",
+    apiBackoffTimer: null,
     bridgeInjected: false,
     pumping: false
   };
@@ -229,11 +238,11 @@
     const videoId = String(payload.videoId || "");
     const tracks = Array.isArray(payload.captionTracks) ? payload.captionTracks : [];
     const transcript = payload.transcript || null;
-    const track = selectEnglishTrack(tracks);
+    const track = selectSourceTrack(tracks);
 
     if (!track && !hasTranscriptApi(transcript)) {
       resetVideoState(videoId, null, "");
-      setStatus("未找到英文字幕轨道：这个视频可能没有 YouTube 英文自动字幕。");
+      setStatus(`未找到源语言字幕轨道：这个视频可能没有 ${state.settings.sourceLanguage || "en"} 自动字幕。`);
       return;
     }
 
@@ -261,26 +270,37 @@
     state.loadingToken += 1;
   }
 
-  function selectEnglishTrack(tracks) {
+  function selectSourceTrack(tracks) {
     const candidates = tracks
-      .filter((track) => track && track.baseUrl && isEnglishTrack(track))
+      .filter((track) => track && track.baseUrl && isSourceTrack(track))
       .sort((left, right) => scoreTrack(left) - scoreTrack(right));
 
     return candidates[0] || null;
   }
 
-  function isEnglishTrack(track) {
+  function isSourceTrack(track) {
+    const sourceLang = String(state.settings.sourceLanguage || "en").toLowerCase();
     const languageCode = String(track.languageCode || "").toLowerCase();
     const vssId = String(track.vssId || "").toLowerCase();
     const name = String(track.name || "").toLowerCase();
-    return languageCode === "en" || languageCode.startsWith("en-") || vssId.includes(".en") || name.includes("english");
+    
+    return languageCode === sourceLang || languageCode.startsWith(sourceLang + "-") || vssId.includes(`.${sourceLang}`) || name.includes(sourceLang);
   }
 
   function scoreTrack(track) {
+    const sourceLang = String(state.settings.sourceLanguage || "en").toLowerCase();
     const languageCode = String(track.languageCode || "").toLowerCase();
     const isAsr = String(track.kind || "").toLowerCase() === "asr";
-    const languageScore = languageCode === "en" ? 0 : languageCode.startsWith("en-") ? 2 : 10;
-    return (isAsr ? 0 : 20) + languageScore;
+    
+    let languageScore = 10;
+    if (languageCode === sourceLang) {
+      languageScore = 0;
+    } else if (languageCode.startsWith(sourceLang + "-")) {
+      languageScore = 2;
+    }
+    
+    // Manual tracks should have LOWER score (higher priority than ASR)
+    return (isAsr ? 20 : 0) + languageScore;
   }
 
   async function loadCaptionTrack(videoId, track, trackFingerprint, transcript) {
@@ -330,7 +350,7 @@
       try {
         setStatus("页面字幕为空，正在尝试 Innertube player 字幕轨道...");
         const innertubeTracks = await fetchInnertubePlayerCaptionTracks(videoId, resolvedTranscript.apiKey);
-        const innertubeTrack = selectEnglishTrack(innertubeTracks);
+        const innertubeTrack = selectSourceTrack(innertubeTracks);
         if (innertubeTrack) {
           return await fetchCaptionTrack(innertubeTrack, videoId);
         }
@@ -684,7 +704,7 @@
     }
 
     if (!hasApiKey()) {
-      setStatus("请在扩展选项页填写翻译 API 配置。");
+      setStatus(`${missingApiConfigText()}。`);
       return;
     }
 
@@ -708,8 +728,9 @@
       .filter((cue) => cue.status === "pending" && !alreadyQueued.has(cue.id))
       .sort((left, right) => priorityScore(left, anchorMs) - priorityScore(right, anchorMs));
 
-    for (let index = 0; index < pending.length; index += BATCH_SIZE) {
-      state.queue.push({ cues: pending.slice(index, index + BATCH_SIZE) });
+    const batchSize = currentBatchSize();
+    for (let index = 0; index < pending.length; index += batchSize) {
+      state.queue.push({ cues: pending.slice(index, index + batchSize) });
     }
 
     pumpQueue();
@@ -730,9 +751,15 @@
       return;
     }
 
+    if (isInApiBackoff()) {
+      scheduleApiBackoffTimer();
+      setStatus(formatApiBackoffStatus());
+      return;
+    }
+
     state.pumping = true;
     try {
-      while (state.inFlight.size < MAX_PARALLEL_BATCHES && state.queue.length) {
+      while (state.inFlight.size < currentMaxParallelBatches() && state.queue.length) {
         const queued = state.queue.shift();
         const cues = queued.cues.filter((cue) => cue.status === "pending");
         if (!cues.length) {
@@ -854,6 +881,12 @@
 
   function handleBatchFailure(batch, message) {
     const retryable = isRetryableTranslationError(message);
+    const backoffMs = retryable ? apiBackoffMsForError(message) : 0;
+
+    if (backoffMs && requeueBatchForBackoff(batch, message)) {
+      applyApiBackoff(message, backoffMs);
+      return;
+    }
 
     for (const cue of batch.cues) {
       if (cue.status === "translating") {
@@ -864,7 +897,7 @@
         cue.lastError = message;
       }
     }
-    setStatus(message.includes("API Key") ? "请在扩展选项页填写翻译 API 配置。" : `翻译失败：${message}`);
+    setStatus(message.includes("API Key") ? `${missingApiConfigText()}。` : `翻译失败：${message}`);
   }
 
   function queueCueTranslationRetry(cue, message) {
@@ -883,14 +916,109 @@
 
   function enqueueRetryCues(cues) {
     const retryCues = cues.filter((cue) => cue && cue.status === "pending");
-    for (let index = retryCues.length; index > 0; index -= RETRY_BATCH_SIZE) {
-      const start = Math.max(0, index - RETRY_BATCH_SIZE);
+    const retryBatchSize = currentRetryBatchSize();
+    for (let index = retryCues.length; index > 0; index -= retryBatchSize) {
+      const start = Math.max(0, index - retryBatchSize);
       state.queue.unshift({ cues: retryCues.slice(start, index) });
     }
   }
 
   function isRetryableTranslationError(message) {
     return Core.classifyTranslationError(message) === "retryable";
+  }
+
+  function currentTranslationConfig() {
+    return Core.resolveTranslationConfig(state.settings);
+  }
+
+  function isGeminiProvider() {
+    return currentTranslationConfig().apiStyle === "gemini";
+  }
+
+  function currentBatchSize() {
+    return isGeminiProvider() ? GEMINI_BATCH_SIZE : BATCH_SIZE;
+  }
+
+  function currentRetryBatchSize() {
+    return isGeminiProvider() ? GEMINI_RETRY_BATCH_SIZE : RETRY_BATCH_SIZE;
+  }
+
+  function currentMaxParallelBatches() {
+    return isGeminiProvider() ? GEMINI_MAX_PARALLEL_BATCHES : MAX_PARALLEL_BATCHES;
+  }
+
+  function requeueBatchForBackoff(batch, message) {
+    const eligible = [];
+    for (const cue of batch.cues) {
+      if (cue.status === "translating") {
+        cue.lastError = message;
+        cue.status = "pending";
+        eligible.push(cue);
+      }
+    }
+    if (!eligible.length) {
+      return false;
+    }
+    enqueueRetryCues(eligible);
+    return true;
+  }
+
+  function apiBackoffMsForError(message) {
+    const text = String(message || "");
+    if (/429|TooManyRequests|too many requests|rate limit/i.test(text)) {
+      return RATE_LIMIT_BACKOFF_MS;
+    }
+    if (/503|ServiceUnavailable|unavailable/i.test(text)) {
+      return SERVICE_BACKOFF_MS;
+    }
+    if (/timeout|aborted|network|failed to fetch/i.test(text)) {
+      return DEFAULT_API_BACKOFF_MS;
+    }
+    return 0;
+  }
+
+  function applyApiBackoff(message, backoffMs) {
+    state.apiBackoffUntil = Math.max(state.apiBackoffUntil || 0, Date.now() + backoffMs);
+    state.apiBackoffMessage = simplifyTranslationError(message);
+    scheduleApiBackoffTimer();
+    setStatus(formatApiBackoffStatus());
+  }
+
+  function isInApiBackoff() {
+    return state.apiBackoffUntil && Date.now() < state.apiBackoffUntil;
+  }
+
+  function scheduleApiBackoffTimer() {
+    if (state.apiBackoffTimer) {
+      clearTimeout(state.apiBackoffTimer);
+    }
+
+    const remainingMs = Math.max(0, (state.apiBackoffUntil || 0) - Date.now());
+    if (!remainingMs) {
+      state.apiBackoffUntil = 0;
+      state.apiBackoffMessage = "";
+      state.apiBackoffTimer = null;
+      return;
+    }
+
+    state.apiBackoffTimer = setTimeout(() => {
+      state.apiBackoffTimer = null;
+      if (isInApiBackoff()) {
+        scheduleApiBackoffTimer();
+        setStatus(formatApiBackoffStatus());
+        return;
+      }
+      state.apiBackoffUntil = 0;
+      state.apiBackoffMessage = "";
+      updateProgressStatus();
+      pumpQueue();
+    }, Math.min(remainingMs, 60000));
+  }
+
+  function formatApiBackoffStatus() {
+    const seconds = Math.max(1, Math.ceil(((state.apiBackoffUntil || 0) - Date.now()) / 1000));
+    const detail = state.apiBackoffMessage ? `：${state.apiBackoffMessage}` : "";
+    return `API 请求过快，暂停 ${seconds} 秒后自动重试${detail}`;
   }
 
   // When the upstream model truncates a batch (finish_reason=length), re-queue
@@ -936,7 +1064,11 @@
 
   function hasApiKey() {
     const config = Core.resolveTranslationConfig(state.settings);
-    return Boolean(config.apiKey && config.chatCompletionsUrl && config.model);
+    const endpointUrl =
+      config.apiStyle === "gemini"
+        ? config.generateContentUrl
+        : config.chatCompletionsUrl;
+    return Boolean(config.apiKey && endpointUrl && config.model);
   }
 
   function watchVideoElement() {
@@ -1502,12 +1634,36 @@
 
   function fallbackTextForCue(cue) {
     if (!hasApiKey()) {
-      return "请填写翻译 API 配置";
+      return missingApiConfigText();
     }
     if (cue.status === "failed") {
-      return "翻译失败";
+      return formatCueFailureText(cue.lastError);
     }
     return "翻译中...";
+  }
+
+  function formatCueFailureText(message) {
+    const detail = simplifyTranslationError(message);
+    return detail ? `翻译失败：${detail}` : "翻译失败";
+  }
+
+  function simplifyTranslationError(message) {
+    const text = Core.normalizeSubtitleText(message || "");
+    if (!text) {
+      return "";
+    }
+
+    return text
+      .replace(/^Error:\s*/i, "")
+      .replace(/^Gemini request failed \((\d+)\):\s*/i, "Gemini $1：")
+      .replace(/^DeepSeek request failed \((\d+)\):\s*/i, "DeepSeek $1：")
+      .replace(/^Custom API request failed \((\d+)\):\s*/i, "API $1：")
+      .slice(0, 90);
+  }
+
+  function missingApiConfigText() {
+    const config = Core.resolveTranslationConfig(state.settings);
+    return `请在扩展选项页填写 ${config.providerLabel} API 配置`;
   }
 
   function setStatus(text) {
