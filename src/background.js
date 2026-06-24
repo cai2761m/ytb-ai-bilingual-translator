@@ -86,9 +86,19 @@ async function handleTranslateBatch(message) {
     if (!id) {
       continue;
     }
-    const cachedText = cacheValue.items && cacheValue.items[id];
+    const cachedValue = cacheValue.items && cacheValue.items[id];
+    const cachedText =
+      typeof cachedValue === "string"
+        ? cachedValue
+        : cachedValue && typeof cachedValue === "object"
+          ? cachedValue.translatedText
+          : "";
     if (cachedText) {
-      cachedItems.push({ id, translatedText: cachedText, cached: true });
+      const cachedItem = { id, translatedText: cachedText, cached: true };
+      if (cachedValue && typeof cachedValue === "object" && cachedValue.displaySourceText) {
+        cachedItem.displaySourceText = cachedValue.displaySourceText;
+      }
+      cachedItems.push(cachedItem);
     } else {
       missingCues.push({
         id,
@@ -117,7 +127,9 @@ async function handleTranslateBatch(message) {
 
   const mergedCacheItems = Object.assign({}, cacheValue.items || {});
   for (const item of translatedItems) {
-    mergedCacheItems[item.id] = item.translatedText;
+    mergedCacheItems[item.id] = item.displaySourceText
+      ? { translatedText: item.translatedText, displaySourceText: item.displaySourceText }
+      : item.translatedText;
   }
 
   await storageSet({
@@ -164,9 +176,10 @@ async function translateBatch({ translationConfig, sourceLanguage, targetLanguag
         role: "system",
         content:
           "You are a subtitle translation engine. Translate English subtitles into natural Simplified Chinese. " +
-          "Keep meaning concise for on-screen reading. Return exactly one item for every input id and never skip ids. " +
+          "Keep meaning concise for on-screen reading. Also restore natural punctuation and capitalization for the English source. " +
+          "Return exactly one item for every input id and never skip ids. " +
           "Output json only in this exact format: " +
-          "{\"items\":[{\"id\":\"0\",\"translatedText\":\"...\"}]}. Do not add commentary."
+          "{\"items\":[{\"id\":\"0\",\"translatedText\":\"...\",\"displaySourceText\":\"...\"}]}. Do not add commentary."
       },
       {
         role: "user",

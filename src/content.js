@@ -820,14 +820,20 @@
     const translatedById = new Map();
     for (const item of items) {
       if (item && item.id != null && item.translatedText) {
-        translatedById.set(String(item.id), Core.normalizeSubtitleText(item.translatedText));
+        translatedById.set(String(item.id), {
+          translatedText: Core.normalizeSubtitleText(item.translatedText),
+          displaySourceText: item.cached ? "" : Core.formatDisplaySourceText(item.displaySourceText || "")
+        });
       }
     }
 
     for (const cue of batch.cues) {
-      const translatedText = translatedById.get(String(cue.id));
-      if (translatedText) {
-        cue.translatedText = translatedText;
+      const translation = translatedById.get(String(cue.id));
+      if (translation && translation.translatedText) {
+        if (translation.displaySourceText) {
+          cue.displaySourceText = translation.displaySourceText;
+        }
+        cue.translatedText = translation.translatedText;
         cue.status = "translated";
         cue.translationRetryCount = 0;
       } else {

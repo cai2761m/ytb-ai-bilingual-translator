@@ -21,6 +21,52 @@
   const DEEPSEEK_BASE_URL = "https://api.deepseek.com";
 
   const SENTENCE_END_RE = /[.!?。！？]["')\]]?$/;
+  const DISPLAY_SENTENCE_END_RE = /[.!?]["')\]]?$/;
+  const DISPLAY_BREAK_WORDS = new Set([
+    "actually",
+    "also",
+    "anyway",
+    "basically",
+    "but",
+    "finally",
+    "first",
+    "however",
+    "instead",
+    "like",
+    "meanwhile",
+    "next",
+    "now",
+    "second",
+    "seems",
+    "so",
+    "then",
+    "well"
+  ]);
+  const DISPLAY_PREPOSITION_WORDS = new Set([
+    "about",
+    "after",
+    "as",
+    "at",
+    "before",
+    "by",
+    "for",
+    "from",
+    "in",
+    "into",
+    "of",
+    "on",
+    "onto",
+    "over",
+    "than",
+    "through",
+    "to",
+    "under",
+    "with",
+    "without"
+  ]);
+  const DISPLAY_CLAUSE_END_WORDS = new Set(["bad", "done", "fine", "good", "ok", "okay", "work", "works"]);
+  const DISPLAY_DISCOURSE_WORDS = new Set(["like", "so", "but", "then", "now", "well"]);
+  const DISPLAY_PRONOUN_WORDS = new Set(["i", "we", "you", "he", "she", "they", "it", "this", "that", "there"]);
   const TAG_RE = /<[^>]+>/g;
 
   function decodeHtmlEntities(value) {
@@ -54,6 +100,123 @@
       .replace(TAG_RE, " ")
       .replace(/\s+/g, " ")
       .trim();
+  }
+
+  function cleanDisplayWord(value) {
+    return String(value || "").replace(/^[^A-Za-z']+|[^A-Za-z']+$/g, "").toLowerCase();
+  }
+
+  function capitalizeDisplaySentence(value) {
+    return String(value || "")
+      .replace(/\bi\b/g, "I")
+      .replace(/(^|[.!?]\s+)([a-z])/g, (match, prefix, letter) => prefix + letter.toUpperCase());
+  }
+
+  function ensureDisplaySentenceEnd(value) {
+    const text = String(value || "").trim();
+    if (!text || DISPLAY_SENTENCE_END_RE.test(text)) {
+      return text;
+    }
+    if (/[,;:]$/.test(text)) {
+      return text.slice(0, -1) + ".";
+    }
+    return text + ".";
+  }
+
+  function polishDisplaySentence(value) {
+    return ensureDisplaySentenceEnd(
+      capitalizeDisplaySentence(value)
+        .replace(/^(Like|So|Well|Now|Actually) I\b/, "$1, I")
+        .replace(/^(Like|So|Well|Now|Actually) we\b/, "$1, we")
+        .replace(/^(Like|So|Well|Now|Actually) you\b/, "$1, you")
+    );
+  }
+
+  function findDisplayBreak(words, start, end) {
+    const remaining = end - start;
+    if (remaining <= 8) {
+      return -1;
+    }
+
+    for (let index = start + 4; index <= end - 3; index += 1) {
+      const word = cleanDisplayWord(words[index]);
+      const previousWord = cleanDisplayWord(words[index - 1]);
+      if ((word === "it's" || word === "it") && DISPLAY_CLAUSE_END_WORDS.has(previousWord)) {
+        return index;
+      }
+    }
+
+    const minOffset = 6;
+    const idealOffset = 10;
+    const maxOffset = 16;
+    let bestIndex = -1;
+    let bestScore = Infinity;
+
+    for (let offset = minOffset; offset <= Math.min(maxOffset, remaining - 4); offset += 1) {
+      const index = start + offset;
+      const word = cleanDisplayWord(words[index]);
+      const previousWord = cleanDisplayWord(words[index - 1]);
+      if (!DISPLAY_BREAK_WORDS.has(word)) {
+        continue;
+      }
+      if (DISPLAY_PREPOSITION_WORDS.has(previousWord)) {
+        continue;
+      }
+      const score = Math.abs(offset - idealOffset) + (word === "seems" ? -2 : 0);
+      if (score < bestScore) {
+        bestScore = score;
+        bestIndex = index;
+      }
+    }
+
+    if (bestIndex > start) {
+      return bestIndex;
+    }
+
+    for (let index = start + 2; index <= end - 4; index += 1) {
+      const word = cleanDisplayWord(words[index]);
+      const nextWord = cleanDisplayWord(words[index + 1]);
+      const previousWord = cleanDisplayWord(words[index - 1]);
+      if (DISPLAY_PREPOSITION_WORDS.has(previousWord)) {
+        continue;
+      }
+      if (DISPLAY_DISCOURSE_WORDS.has(word) && DISPLAY_PRONOUN_WORDS.has(nextWord)) {
+        return index;
+      }
+    }
+
+    return -1;
+  }
+
+  function formatDisplaySourceText(value) {
+    const text = normalizeSubtitleText(value);
+    if (!text) {
+      return "";
+    }
+
+    const normalized = text.replace(/\bi\b/g, "I");
+    if (/[.!?]/.test(normalized)) {
+      return ensureDisplaySentenceEnd(capitalizeDisplaySentence(normalized));
+    }
+
+    const words = normalized.split(" ");
+    const sentences = [];
+    let start = 0;
+    while (start < words.length) {
+      const breakIndex = findDisplayBreak(words, start, words.length);
+      if (breakIndex > start) {
+        sentences.push(words.slice(start, breakIndex).join(" "));
+        start = breakIndex;
+      } else {
+        sentences.push(words.slice(start).join(" "));
+        break;
+      }
+    }
+
+    return sentences
+      .map(polishDisplaySentence)
+      .filter(Boolean)
+      .join(" ");
   }
 
   function cueTextFromSegments(segments) {
@@ -330,7 +493,7 @@
       startMs: first.startMs,
       endMs: last.endMs,
       sourceText: text,
-      displaySourceText: text,
+      displaySourceText: formatDisplaySourceText(text),
       translatedText: "",
       status: "pending"
     };
@@ -490,8 +653,15 @@
         const translatedText = normalizeSubtitleText(
           item && (item.translatedText || item.translation || item.text || item.zh)
         );
+        const displaySourceText = formatDisplaySourceText(
+          item && (item.displaySourceText || item.punctuatedSourceText || item.sourceDisplayText)
+        );
         if (id && translatedText) {
-          items.push({ id, translatedText });
+          const result = { id, translatedText };
+          if (displaySourceText) {
+            result.displaySourceText = displaySourceText;
+          }
+          items.push(result);
         }
       }
       return items;
@@ -530,6 +700,7 @@
     MERGE_VERSION,
     decodeHtmlEntities,
     normalizeSubtitleText,
+    formatDisplaySourceText,
     parseJson3Captions,
     parseVttCaptions,
     parseVttTime,

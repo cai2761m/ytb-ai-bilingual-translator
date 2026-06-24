@@ -159,8 +159,51 @@ test("mergeCaptionFragments combines small fragments into sentence cues", () => 
   assert.equal(merged.length, 2);
   assert.equal(merged[0].sourceText, "Hello world.");
   assert.equal(merged[1].sourceText, "New idea");
+  assert.equal(merged[1].displaySourceText, "New idea.");
   assert.equal(merged[0].id, "0");
   assert.equal(merged[1].id, "1");
+});
+
+test("formatDisplaySourceText punctuates plain ASR English for display", () => {
+  assert.equal(
+    Core.formatDisplaySourceText(
+      "basically identical just from an aesthetic point of view seems bad like i don't like the idea of having code"
+    ),
+    "Basically identical just from an aesthetic point of view. Seems bad. Like, I don't like the idea of having code."
+  );
+});
+
+test("formatDisplaySourceText does not break prepositional phrases", () => {
+  const display = Core.formatDisplaySourceText(
+    "we talked about the idea of having two versions of this longest method and that'll work it's a way to get a longest"
+  );
+
+  assert.equal(
+    display,
+    "We talked about the idea of having two versions of this longest method and that'll work. It's a way to get a longest."
+  );
+  assert.doesNotMatch(display, /of\. This/);
+});
+
+test("mergeCaptionFragments preserves raw source while formatting display text", () => {
+  const raw = [
+    { startMs: 0, endMs: 500, sourceText: "basically identical" },
+    { startMs: 600, endMs: 1000, sourceText: "just from an aesthetic point of view" },
+    { startMs: 1100, endMs: 1500, sourceText: "seems bad" },
+    { startMs: 1600, endMs: 2000, sourceText: "like i don't like the idea" },
+    { startMs: 2100, endMs: 2500, sourceText: "of having code" }
+  ];
+
+  const merged = Core.mergeCaptionFragments(raw);
+  assert.equal(merged.length, 1);
+  assert.equal(
+    merged[0].sourceText,
+    "basically identical just from an aesthetic point of view seems bad like i don't like the idea of having code"
+  );
+  assert.equal(
+    merged[0].displaySourceText,
+    "Basically identical just from an aesthetic point of view. Seems bad. Like, I don't like the idea of having code."
+  );
 });
 
 test("mergeCaptionFragments breaks on long gaps", () => {
@@ -191,6 +234,12 @@ test("parseDeepSeekTranslationContent accepts common JSON shapes", () => {
   assert.deepEqual(Core.parseDeepSeekTranslationContent('{"2":"世界"}'), [
     { id: "2", translatedText: "世界" }
   ]);
+  assert.deepEqual(
+    Core.parseDeepSeekTranslationContent(
+      '{"items":[{"id":"3","translatedText":"translated","displaySourceText":"hello world"}]}'
+    ),
+    [{ id: "3", translatedText: "translated", displaySourceText: "Hello world." }]
+  );
 });
 
 test("cache keys are stable and namespaced", () => {
