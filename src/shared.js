@@ -13,12 +13,67 @@
     fontScale: 1,
     subtitleEnabled: true,
     subtitlePosition: null,
-    cacheVersion: "1"
+    cacheVersion: "1",
+    translationCacheMaxItems: 2000
   });
 
   const DEEPSEEK_MODEL = "deepseek-v4-flash";
   const MERGE_VERSION = "1";
   const DEEPSEEK_BASE_URL = "https://api.deepseek.com";
+
+  // Upper bound on the number of cached cue translations. Each `ytbt:` storage
+  // key holds an entire video; once this many cached cues accumulate, the
+  // least-recently-updated video keys are evicted to stay under the quota.
+  const DEFAULT_CACHE_MAX_ITEMS = 2000;
+
+  // Human-readable labels for the languages the prompt references. Unknown
+  // codes fall back to a safe default so the prompt always reads sensibly.
+  const LANGUAGE_LABELS = {
+    "en": "English",
+    "zh-CN": "Simplified Chinese",
+    "zh-TW": "Traditional Chinese"
+  };
+
+  function languageLabel(code, fallback) {
+    const key = String(code || "").trim();
+    if (LANGUAGE_LABELS[key]) {
+      return LANGUAGE_LABELS[key];
+    }
+    // Handle regional variants like "en-US" by matching the base code.
+    const base = key.split("-")[0];
+    return LANGUAGE_LABELS[base] || fallback || "English";
+  }
+
+  function sourceLanguageLabel(code) {
+    return languageLabel(code, "English");
+  }
+
+  function targetLanguageLabel(code) {
+    return languageLabel(code, "Simplified Chinese");
+  }
+
+  // Categorize a translation error so callers can decide whether retrying is
+  // worthwhile. "fatal" must not be retried (bad config, auth, quota);
+  // "retryable" should be retried with backoff (transient network/rate-limit/
+  // parsing issues); "unknown" is treated as fatal to be safe.
+  const TRANSLATION_FATAL_RE =
+    /API Key|not configured|base URL|model|401|403|quota|insufficient/i;
+  const TRANSLATION_RETRYABLE_RE =
+    /429|rate limit|too many requests|timeout|aborted|network|failed to fetch|non-JSON|empty content|did not contain usable translations|truncated|finish_reason|request failed \(5\d\d\)/i;
+
+  function classifyTranslationError(message) {
+    const text = String(message || "");
+    if (!text) {
+      return "unknown";
+    }
+    if (TRANSLATION_FATAL_RE.test(text)) {
+      return "fatal";
+    }
+    if (TRANSLATION_RETRYABLE_RE.test(text)) {
+      return "retryable";
+    }
+    return "unknown";
+  }
 
   const SENTENCE_END_RE = /[.!?。！？]["')\]]?$/;
   const DISPLAY_SENTENCE_END_RE = /[.!?]["')\]]?$/;
@@ -698,9 +753,13 @@
     DEEPSEEK_MODEL,
     DEEPSEEK_BASE_URL,
     MERGE_VERSION,
+    DEFAULT_CACHE_MAX_ITEMS,
     decodeHtmlEntities,
     normalizeSubtitleText,
     formatDisplaySourceText,
+    sourceLanguageLabel,
+    targetLanguageLabel,
+    classifyTranslationError,
     parseJson3Captions,
     parseVttCaptions,
     parseVttTime,

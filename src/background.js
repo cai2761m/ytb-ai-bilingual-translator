@@ -3,6 +3,10 @@ importScripts("shared.js");
 const Core = globalThis.YTBTCore;
 const MAX_RETRIES = 2;
 const REQUEST_TIMEOUT_MS = 20000;
+const CACHE_PREFIX = "ytbt:";
+// In-memory count of cached cue translations so we usually avoid a full storage
+// scan on every write. Reset on service-worker restart; refreshed on demand.
+let cachedItemCount = null;
 
 if (chrome.action && chrome.action.onClicked) {
   chrome.action.onClicked.addListener(() => chrome.runtime.openOptionsPage());
@@ -34,6 +38,10 @@ function storageGet(defaults) {
 
 function storageSet(values) {
   return new Promise((resolve) => chrome.storage.local.set(values, resolve));
+}
+
+function storageRemove(keys) {
+  return new Promise((resolve) => chrome.storage.local.remove(keys, resolve));
 }
 
 async function handleTranslateBatch(message) {
@@ -90,7 +98,7 @@ async function handleTranslateBatch(message) {
     const cachedText =
       typeof cachedValue === "string"
         ? cachedValue
-        : cachedValue && typeof cachedValue === "object"
+        : cachedValue != null && typeof cachedValue === "object"
           ? cachedValue.translatedText
           : "";
     if (cachedText) {
@@ -132,15 +140,18 @@ async function handleTranslateBatch(message) {
       : item.translatedText;
   }
 
-  await storageSet({
-    [cacheKey]: {
+  await persistTranslationCache({
+    cacheKey,
+    cacheValue: {
       items: mergedCacheItems,
       updatedAt: Date.now(),
       provider: translationConfig.provider,
       model: translationConfig.model,
       baseUrl: translationConfig.baseUrl,
       targetLanguage
-    }
+    },
+    addedCount: translatedItems.length,
+    maxItems: Number(settings.translationCacheMaxItems) || Core.DEFAULT_CACHE_MAX_ITEMS
   });
 
   return {
@@ -160,8 +171,17 @@ async function translateWithRetry(request) {
       return await translateBatch(request);
     } catch (error) {
       lastError = error;
+      const message = (error && error.message) || String(error);
+      // Fatal / unknown errors (bad config, auth, quota, unparseable shapes)
+      // should not waste retry budget; only retry transient failures.
+      if (Core.classifyTranslationError(message) !== "retryable") {
+        throw error;
+      }
       if (attempt < MAX_RETRIES) {
-        await delay(500 * Math.pow(2, attempt));
+        // 429 / rate-limit benefits from a longer first backoff so the upstream
+        // quota window can recover before we hammer it again.
+        const base = /429|rate limit|too many requests/i.test(message) ? 2000 : 500;
+        await delay(base * Math.pow(2, attempt));
       }
     }
   }
@@ -169,13 +189,19 @@ async function translateWithRetry(request) {
 }
 
 async function translateBatch({ translationConfig, sourceLanguage, targetLanguage, cues }) {
+  const sourceLabel = Core.sourceLanguageLabel(sourceLanguage);
+  const targetLabel = Core.targetLanguageLabel(targetLanguage);
+  // Allow roughly 200 output tokens per cue so longer batches are not silently
+  // truncated. Bounded to a sane [2048, 8000] range.
+  const maxTokens = Math.min(8000, Math.max(2048, cues.length * 200));
+
   const payload = {
     model: translationConfig.model,
     messages: [
       {
         role: "system",
         content:
-          "You are a subtitle translation engine. Translate English subtitles into natural Simplified Chinese. " +
+          `You are a subtitle translation engine. Translate ${sourceLabel} subtitles into natural ${targetLabel}. ` +
           "Keep meaning concise for on-screen reading. Also restore natural punctuation and capitalization for the English source. " +
           "Return exactly one item for every input id and never skip ids. " +
           "Output json only in this exact format: " +
@@ -192,7 +218,7 @@ async function translateBatch({ translationConfig, sourceLanguage, targetLanguag
     ],
     stream: false,
     temperature: 0.1,
-    max_tokens: 4096
+    max_tokens: maxTokens
   };
 
   if (translationConfig.useJsonResponseFormat) {
@@ -223,15 +249,22 @@ async function translateBatch({ translationConfig, sourceLanguage, targetLanguag
     throw new Error(`${translationConfig.providerLabel} returned non-JSON response.`);
   }
 
+  const choice = body && body.choices && body.choices[0];
   const content =
-    body &&
-    body.choices &&
-    body.choices[0] &&
-    body.choices[0].message &&
-    body.choices[0].message.content;
+    choice &&
+    choice.message &&
+    choice.message.content;
 
   if (!content) {
     throw new Error(`${translationConfig.providerLabel} returned empty content.`);
+  }
+
+  // Detect token-limit truncation so the caller can shrink the batch and retry,
+  // instead of silently dropping cues and entering per-cue retry loops.
+  if (choice && choice.finish_reason === "length") {
+    throw new Error(
+      `${translationConfig.providerLabel} response truncated (finish_reason=length); will retry in smaller batches.`
+    );
   }
 
   const items = Core.parseDeepSeekTranslationContent(content);
@@ -255,4 +288,91 @@ function fetchWithTimeout(url, options) {
 
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// Write a video's translation cache back, evicting least-recently-updated video
+// keys when the total cached-cue count would exceed the configured ceiling.
+// Eviction granularity is per video (each `ytbt:` key), matching the natural
+// "least recently watched video" semantics.
+async function persistTranslationCache({ cacheKey, cacheValue, addedCount, maxItems }) {
+  // Lazily initialize the in-memory count once per service-worker lifetime.
+  if (cachedItemCount == null) {
+    cachedItemCount = await countCachedTranslationItems();
+  }
+
+  const previousItemsInKey = Object.keys(cacheValue.items || {}).length - addedCount;
+  cachedItemCount += Math.max(0, addedCount - Math.max(0, previousItemsInKey));
+
+  if (cachedItemCount > maxItems) {
+    const evicted = await evictOldestCacheKeys(cachedItemCount - maxItems, cacheKey);
+    cachedItemCount -= evicted.freedItems;
+  }
+
+  try {
+    await storageSet({ [cacheKey]: cacheValue });
+  } catch (error) {
+    // The in-memory count may have drifted (e.g. external clears). On a write
+    // failure, recompute from storage and retry the eviction once before giving up.
+    cachedItemCount = await countCachedTranslationItems();
+    if (cachedItemCount > maxItems) {
+      const evicted = await evictOldestCacheKeys(cachedItemCount - maxItems, cacheKey);
+      cachedItemCount -= evicted.freedItems;
+    }
+    await storageSet({ [cacheKey]: cacheValue });
+  }
+}
+
+// Count cached cue translations across every `ytbt:` storage key.
+async function countCachedTranslationItems() {
+  const all = await storageGet(null);
+  let total = 0;
+  for (const key of Object.keys(all)) {
+    if (!key.startsWith(CACHE_PREFIX)) {
+      continue;
+    }
+    const entry = all[key];
+    if (entry && typeof entry === "object" && entry.items) {
+      total += Object.keys(entry.items).length;
+    }
+  }
+  return total;
+}
+
+// Remove oldest video cache keys until at least `itemsToFree` cue slots are
+// reclaimed. The current key is never evicted. Returns how many items freed.
+async function evictOldestCacheKeys(itemsToFree, currentKey) {
+  if (itemsToFree <= 0) {
+    return { freedItems: 0 };
+  }
+  const all = await storageGet(null);
+  const entries = [];
+  for (const key of Object.keys(all)) {
+    if (!key.startsWith(CACHE_PREFIX) || key === currentKey) {
+      continue;
+    }
+    const entry = all[key];
+    if (!entry || typeof entry !== "object" || !entry.items) {
+      continue;
+    }
+    entries.push({
+      key,
+      updatedAt: Number(entry.updatedAt) || 0,
+      itemCount: Object.keys(entry.items).length
+    });
+  }
+  entries.sort((left, right) => left.updatedAt - right.updatedAt);
+
+  let freed = 0;
+  const removeKeys = [];
+  for (const entry of entries) {
+    if (freed >= itemsToFree) {
+      break;
+    }
+    removeKeys.push(entry.key);
+    freed += entry.itemCount;
+  }
+  if (removeKeys.length) {
+    await storageRemove(removeKeys);
+  }
+  return { freedItems: freed };
 }

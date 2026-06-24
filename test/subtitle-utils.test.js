@@ -283,3 +283,38 @@ test("buildChatCompletionsUrl accepts full endpoint URLs", () => {
     "https://api.example.com/v1/chat/completions"
   );
 });
+
+test("sourceLanguageLabel and targetLanguageLabel resolve known and regional codes", () => {
+  assert.equal(Core.sourceLanguageLabel("en"), "English");
+  assert.equal(Core.sourceLanguageLabel("en-US"), "English");
+  assert.equal(Core.sourceLanguageLabel(undefined), "English");
+
+  assert.equal(Core.targetLanguageLabel("zh-CN"), "Simplified Chinese");
+  assert.equal(Core.targetLanguageLabel("zh-TW"), "Traditional Chinese");
+  // Unknown codes fall back to Simplified Chinese (the default target).
+  assert.equal(Core.targetLanguageLabel("ja"), "Simplified Chinese");
+  assert.equal(Core.targetLanguageLabel(""), "Simplified Chinese");
+});
+
+test("classifyTranslationError marks transient failures as retryable", () => {
+  assert.equal(Core.classifyTranslationError("request failed (429): too many requests"), "retryable");
+  assert.equal(Core.classifyTranslationError("rate limit exceeded"), "retryable");
+  assert.equal(Core.classifyTranslationError("DeepSeek request failed (503): unavailable"), "retryable");
+  assert.equal(Core.classifyTranslationError("timeout"), "retryable");
+  assert.equal(Core.classifyTranslationError("failed to fetch"), "retryable");
+  assert.equal(Core.classifyTranslationError("response truncated (finish_reason=length)"), "retryable");
+  assert.equal(Core.classifyTranslationError("returned non-JSON response."), "retryable");
+});
+
+test("classifyTranslationError marks config and auth errors as fatal", () => {
+  assert.equal(Core.classifyTranslationError("DeepSeek API Key is not configured."), "fatal");
+  assert.equal(Core.classifyTranslationError("request failed (401): unauthorized"), "fatal");
+  assert.equal(Core.classifyTranslationError("request failed (403): forbidden"), "fatal");
+  assert.equal(Core.classifyTranslationError("quota exceeded"), "fatal");
+  assert.equal(Core.classifyTranslationError("insufficient quota"), "fatal");
+});
+
+test("classifyTranslationError treats unrecognised messages as unknown", () => {
+  assert.equal(Core.classifyTranslationError("something unexpected happened"), "unknown");
+  assert.equal(Core.classifyTranslationError(""), "unknown");
+});

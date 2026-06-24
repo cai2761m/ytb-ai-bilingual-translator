@@ -783,7 +783,12 @@
 
       if (!response || response.ok === false) {
         const error = response && response.errors && response.errors[0];
-        handleBatchFailure(currentBatch, error && error.message ? error.message : "翻译失败");
+        const message = error && error.message ? error.message : "翻译失败";
+        if (splitBatchOnTruncation(currentBatch, message)) {
+          // Cues already re-queued in smaller batches; skip per-cue retry path.
+        } else {
+          handleBatchFailure(currentBatch, message);
+        }
       } else {
         applyTranslations(currentBatch, response.items || []);
       }
@@ -796,7 +801,12 @@
         return;
       }
 
-      handleBatchFailure(currentBatch, error.message || String(error));
+      const message = error.message || String(error);
+      if (splitBatchOnTruncation(currentBatch, message)) {
+        // Cues already re-queued in smaller batches; skip per-cue retry path.
+      } else {
+        handleBatchFailure(currentBatch, message);
+      }
     }
 
     updateProgressStatus();
@@ -822,7 +832,7 @@
       if (item && item.id != null && item.translatedText) {
         translatedById.set(String(item.id), {
           translatedText: Core.normalizeSubtitleText(item.translatedText),
-          displaySourceText: item.cached ? "" : Core.formatDisplaySourceText(item.displaySourceText || "")
+          displaySourceText: Core.normalizeSubtitleText(item.displaySourceText || "")
         });
       }
     }
@@ -880,14 +890,30 @@
   }
 
   function isRetryableTranslationError(message) {
-    const text = String(message || "");
-    if (/API Key|not configured|base URL|model|401|403|429|quota|insufficient|rate limit/i.test(text)) {
+    return Core.classifyTranslationError(message) === "retryable";
+  }
+
+  // When the upstream model truncates a batch (finish_reason=length), re-queue
+  // the affected cues in much smaller chunks (RETRY_BATCH_SIZE) so the next
+  // attempt fits within the token budget, instead of retrying the same oversized
+  // batch and looping. Returns true when the split was applied.
+  function splitBatchOnTruncation(batch, message) {
+    if (!/truncated|finish_reason/i.test(String(message || ""))) {
       return false;
     }
-    return (
-      /did not contain usable translations|non-JSON|empty content|timeout|aborted|network|failed to fetch|request failed \(5\d\d\)/i.test(text) ||
-      !/request failed \(\d+\)/i.test(text)
-    );
+    const eligible = [];
+    for (const cue of batch.cues) {
+      if (cue.status === "translating") {
+        cue.translationRetryCount = Number(cue.translationRetryCount || 0);
+        cue.status = "pending";
+        eligible.push(cue);
+      }
+    }
+    if (!eligible.length) {
+      return false;
+    }
+    enqueueRetryCues(eligible);
+    return true;
   }
 
   function updateProgressStatus() {
