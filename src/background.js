@@ -231,10 +231,13 @@ async function translateBatch({ translationConfig, sourceLanguage, targetLanguag
     : "Do not rewrite the source words for ASR correction; only restore natural punctuation and capitalization. ";
   const mergeInstruction =
     "CRITICAL: Subtitles are often broken into incomplete fragments across multiple ids. You must mentally merge these fragments into structurally complete and readable sentences. For all ids that belong to the same merged sentence, return the exact same complete merged sentence in both `displaySourceText` and `translatedText`. Do not return fragmented text. ";
+  const terminologyInstruction =
+    "For any professional, technical, or specialized terms, you must append the original source term in parentheses immediately after its translation (e.g., '翻译 (Translation)'). ";
   const systemPrompt =
     `You are a subtitle translation engine. Translate ${sourceLabel} subtitles into natural ${targetLabel}. ` +
     sourcePolishInstruction +
     mergeInstruction +
+    terminologyInstruction +
     "Keep meaning concise for on-screen reading. The displaySourceText field must contain the polished source subtitle, and translatedText must translate that polished meaning. " +
     "Return exactly one item for every input id and never skip ids. " +
     "Output json only in this exact format: " +
