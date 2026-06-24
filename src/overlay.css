@@ -37,6 +37,10 @@ html.ytbt-hide-native-captions .caption-window,
     0 0 3px rgba(0, 0, 0, 0.95);
 }
 
+.ytbt-overlay.ytbt-dragging {
+  user-select: none;
+}
+
 .ytbt-overlay[hidden] {
   display: none !important;
 }
@@ -48,6 +52,15 @@ html.ytbt-hide-native-captions .caption-window,
   border-radius: 6px;
   background: rgba(0, 0, 0, 0.36);
   backdrop-filter: blur(2px);
+  cursor: grab;
+  pointer-events: auto;
+  touch-action: none;
+  user-select: none;
+}
+
+.ytbt-overlay.ytbt-dragging .ytbt-lines,
+.ytbt-overlay.ytbt-dragging .ytbt-status {
+  cursor: grabbing;
 }
 
 .ytbt-cn {
@@ -72,6 +85,10 @@ html.ytbt-hide-native-captions .caption-window,
   background: rgba(0, 0, 0, 0.58);
   font-size: calc(16px * var(--ytbt-font-scale));
   font-weight: 600;
+  cursor: grab;
+  pointer-events: auto;
+  touch-action: none;
+  user-select: none;
 }
 
 .ytbt-overlay.ytbt-no-status .ytbt-status,

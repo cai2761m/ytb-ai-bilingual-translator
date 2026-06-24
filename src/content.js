@@ -7,6 +7,8 @@
   const MAX_PARALLEL_BATCHES = 2;
   const PRIORITY_WINDOW_MS = 120000;
   const URGENT_RESCHEDULE_MS = 1000;
+  const DRAG_LONG_PRESS_MS = 220;
+  const DRAG_EDGE_PADDING_PX = 12;
   const NATIVE_CAPTION_SELECTOR = [
     ".ytp-caption-window-container",
     ".ytp-caption-window-rollup",
@@ -37,6 +39,17 @@
     statusText: "",
     overlay: null,
     overlayParts: null,
+    overlayDrag: {
+      pointerId: null,
+      timer: null,
+      active: false,
+      startClientX: 0,
+      startClientY: 0,
+      offsetX: 0,
+      offsetY: 0,
+      lastClientX: 0,
+      lastClientY: 0
+    },
     video: null,
     nativeCaptionObserver: null,
     lastNativeCaptionSweepAt: 0,
@@ -70,6 +83,10 @@
     return new Promise((resolve) => chrome.storage.local.get(defaults, resolve));
   }
 
+  function storageSet(values) {
+    return new Promise((resolve) => chrome.storage.local.set(values, resolve));
+  }
+
   async function loadSettings() {
     const stored = await storageGet(Core.DEFAULT_SETTINGS);
     state.settings = normalizeSettings(stored);
@@ -82,7 +99,25 @@
     merged.subtitleEnabled = merged.subtitleEnabled !== false;
     merged.targetLanguage = merged.targetLanguage || Core.DEFAULT_SETTINGS.targetLanguage;
     merged.sourceLanguage = merged.sourceLanguage || Core.DEFAULT_SETTINGS.sourceLanguage;
+    merged.subtitlePosition = normalizeSubtitlePosition(merged.subtitlePosition);
     return merged;
+  }
+
+  function normalizeSubtitlePosition(position) {
+    if (!position || typeof position !== "object") {
+      return null;
+    }
+
+    const xPct = Number(position.xPct);
+    const yPct = Number(position.yPct);
+    if (!Number.isFinite(xPct) || !Number.isFinite(yPct)) {
+      return null;
+    }
+
+    return {
+      xPct: Math.min(98, Math.max(2, xPct)),
+      yPct: Math.min(96, Math.max(4, yPct))
+    };
   }
 
   function bindStorageChanges() {
@@ -133,6 +168,7 @@
     if (state.overlay) {
       state.overlay.style.setProperty("--ytbt-font-scale", String(state.settings.fontScale));
       state.overlay.hidden = !state.settings.subtitleEnabled;
+      applyOverlayPosition();
     }
   }
 
@@ -1126,9 +1162,221 @@
       en: overlay.querySelector(".ytbt-en"),
       status: overlay.querySelector(".ytbt-status")
     };
+    bindOverlayDragHandlers(overlay);
     player.appendChild(overlay);
     applySettings();
     return overlay;
+  }
+
+  function bindOverlayDragHandlers(overlay) {
+    if (!overlay || overlay.dataset.ytbtDragBound === "true") {
+      return;
+    }
+
+    overlay.dataset.ytbtDragBound = "true";
+    overlay.addEventListener("pointerdown", handleOverlayPointerDown, true);
+    for (const surface of overlay.querySelectorAll(".ytbt-lines, .ytbt-status")) {
+      surface.addEventListener("pointerdown", handleOverlayPointerDown, true);
+    }
+  }
+
+  function handleOverlayPointerDown(event) {
+    if (!state.settings.subtitleEnabled || !state.overlay) {
+      return;
+    }
+    if (event.pointerType === "mouse" && event.button !== 0) {
+      return;
+    }
+    if (!event.target.closest(".ytbt-lines, .ytbt-status")) {
+      return;
+    }
+    if (state.overlayDrag.pointerId != null) {
+      cancelOverlayDrag();
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    clearOverlayDragTimer();
+
+    const drag = state.overlayDrag;
+    drag.pointerId = event.pointerId;
+    drag.active = false;
+    drag.startClientX = event.clientX;
+    drag.startClientY = event.clientY;
+    drag.lastClientX = event.clientX;
+    drag.lastClientY = event.clientY;
+    setOverlayDragOffsets(event.clientX, event.clientY);
+
+    document.addEventListener("pointermove", handleOverlayPointerMove, true);
+    document.addEventListener("pointerup", handleOverlayPointerUp, true);
+    document.addEventListener("pointercancel", handleOverlayPointerCancel, true);
+    document.addEventListener("mouseup", handleOverlayMouseUpFallback, true);
+
+    drag.timer = setTimeout(() => {
+      startOverlayDrag();
+    }, DRAG_LONG_PRESS_MS);
+  }
+
+  function setOverlayDragOffsets(clientX, clientY) {
+    if (!state.overlay) {
+      return;
+    }
+
+    const overlayRect = state.overlay.getBoundingClientRect();
+    state.overlayDrag.offsetX = clientX - overlayRect.left;
+    state.overlayDrag.offsetY = clientY - overlayRect.top;
+  }
+
+  function startOverlayDrag() {
+    if (!state.overlay || state.overlayDrag.pointerId == null) {
+      return;
+    }
+
+    state.overlayDrag.active = true;
+    state.overlay.classList.add("ytbt-dragging");
+    moveOverlayToPointer(state.overlayDrag.lastClientX, state.overlayDrag.lastClientY);
+  }
+
+  function handleOverlayPointerMove(event) {
+    const drag = state.overlayDrag;
+    if (drag.pointerId !== event.pointerId) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    drag.lastClientX = event.clientX;
+    drag.lastClientY = event.clientY;
+
+    if (!drag.active) {
+      return;
+    }
+
+    moveOverlayToPointer(event.clientX, event.clientY);
+  }
+
+  function handleOverlayPointerUp(event) {
+    if (state.overlayDrag.pointerId !== event.pointerId) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    const wasDragging = state.overlayDrag.active;
+    if (wasDragging) {
+      saveOverlayPosition();
+    }
+    cancelOverlayDrag();
+  }
+
+  function handleOverlayPointerCancel(event) {
+    if (event && state.overlayDrag.pointerId !== event.pointerId) {
+      return;
+    }
+    cancelOverlayDrag();
+  }
+
+  function handleOverlayMouseUpFallback(event) {
+    if (state.overlayDrag.pointerId == null) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    if (state.overlayDrag.active) {
+      saveOverlayPosition();
+    }
+    cancelOverlayDrag();
+  }
+
+  function moveOverlayToPointer(clientX, clientY) {
+    const player = getOverlayPlayer();
+    if (!player || !state.overlay) {
+      return;
+    }
+
+    const playerRect = player.getBoundingClientRect();
+    const overlayRect = state.overlay.getBoundingClientRect();
+    if (!playerRect.width || !playerRect.height || !overlayRect.width || !overlayRect.height) {
+      return;
+    }
+
+    const centerX = clientX - state.overlayDrag.offsetX + overlayRect.width / 2;
+    const centerY = clientY - state.overlayDrag.offsetY + overlayRect.height / 2;
+    const minX = playerRect.left + overlayRect.width / 2 + DRAG_EDGE_PADDING_PX;
+    const maxX = playerRect.right - overlayRect.width / 2 - DRAG_EDGE_PADDING_PX;
+    const minY = playerRect.top + overlayRect.height / 2 + DRAG_EDGE_PADDING_PX;
+    const maxY = playerRect.bottom - overlayRect.height / 2 - DRAG_EDGE_PADDING_PX;
+    const clampedX = clamp(centerX, Math.min(minX, maxX), Math.max(minX, maxX));
+    const clampedY = clamp(centerY, Math.min(minY, maxY), Math.max(minY, maxY));
+
+    state.settings.subtitlePosition = {
+      xPct: ((clampedX - playerRect.left) / playerRect.width) * 100,
+      yPct: ((clampedY - playerRect.top) / playerRect.height) * 100
+    };
+    applyOverlayPosition();
+  }
+
+  async function saveOverlayPosition() {
+    const position = normalizeSubtitlePosition(state.settings.subtitlePosition);
+    if (!position) {
+      return;
+    }
+    state.settings.subtitlePosition = position;
+    await storageSet({ subtitlePosition: position });
+  }
+
+  function cancelOverlayDrag() {
+    clearOverlayDragTimer();
+    document.removeEventListener("pointermove", handleOverlayPointerMove, true);
+    document.removeEventListener("pointerup", handleOverlayPointerUp, true);
+    document.removeEventListener("pointercancel", handleOverlayPointerCancel, true);
+    document.removeEventListener("mouseup", handleOverlayMouseUpFallback, true);
+
+    if (state.overlay) {
+      state.overlay.classList.remove("ytbt-dragging");
+    }
+
+    state.overlayDrag.pointerId = null;
+    state.overlayDrag.active = false;
+  }
+
+  function clearOverlayDragTimer() {
+    if (state.overlayDrag.timer) {
+      clearTimeout(state.overlayDrag.timer);
+      state.overlayDrag.timer = null;
+    }
+  }
+
+  function applyOverlayPosition() {
+    if (!state.overlay) {
+      return;
+    }
+
+    const position = normalizeSubtitlePosition(state.settings.subtitlePosition);
+    if (!position) {
+      state.overlay.style.left = "50%";
+      state.overlay.style.top = "";
+      state.overlay.style.bottom = "calc(8% + 44px)";
+      state.overlay.style.transform = "translateX(-50%)";
+      return;
+    }
+
+    state.overlay.style.left = `${position.xPct}%`;
+    state.overlay.style.top = `${position.yPct}%`;
+    state.overlay.style.bottom = "auto";
+    state.overlay.style.transform = "translate(-50%, -50%)";
+  }
+
+  function getOverlayPlayer() {
+    return (
+      (state.overlay && state.overlay.parentElement && state.overlay.parentElement.closest(".html5-video-player, #movie_player")) ||
+      document.querySelector(".html5-video-player") ||
+      document.querySelector("#movie_player")
+    );
+  }
+
+  function clamp(value, min, max) {
+    return Math.min(max, Math.max(min, value));
   }
 
   function updateOverlay() {

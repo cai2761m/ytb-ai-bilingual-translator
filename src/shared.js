@@ -7,6 +7,7 @@
     sourceLanguage: "en",
     fontScale: 1,
     subtitleEnabled: true,
+    subtitlePosition: null,
     cacheVersion: "1"
   });
 
