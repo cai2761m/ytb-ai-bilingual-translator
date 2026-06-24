@@ -1,22 +1,74 @@
 # ytb-ai-bilingual-translator
 
-Chrome MV3 extension that reads YouTube's available English caption track, merges fragmented captions into readable sentence-like cues, pre-translates them with a configurable translation API, and renders a custom Chinese-English subtitle overlay while hiding YouTube's native CC window.
+## About
+
+A Chrome extension (Manifest V3) that brings **AI-powered bilingual subtitles** to YouTube. It automatically fetches the English caption track from any YouTube video, merges fragmented cues into natural sentence-level segments, translates them into Chinese (Simplified or Traditional) via a configurable LLM API, and renders a sleek **Chinese-English subtitle overlay** directly on the video player — all while hiding YouTube's native CC window.
+
+No audio recognition is needed; the extension works entirely from YouTube's existing caption data.
+
+## Features
+
+- **Intelligent caption merging** — reassembles YouTube's word/phrase-level caption fragments into complete, readable sentences.
+- **AI-powered translation** — translates subtitles using LLM APIs with context-aware prompts for natural, high-quality results.
+- **Priority-based scheduling** — translates captions near the current playback position first, then continues with the rest of the video in the background.
+- **ASR error correction** — optionally uses AI to fix common auto-generated subtitle mistakes before translation.
+- **Draggable overlay** — the bilingual subtitle overlay can be repositioned via long-press drag, and the position is persisted.
+- **Adjustable font size** — subtitle size can be scaled from 0.7× to 1.8× via the options page.
+- **Translation cache** — caches translated cues in `chrome.storage.local` to avoid redundant API calls, with automatic LRU eviction.
+- **Parallel batch translation** — sends multiple batches concurrently with configurable parallelism and smart back-off on rate limits / server errors.
+- **Multiple translation providers**:
+  - **DeepSeek** (default) — works out of the box with an API key.
+  - **Gemini** — Google's Gemini API with dedicated batching parameters.
+  - **Custom OpenAI-compatible API** — any provider that implements the OpenAI Chat Completions interface.
 
 ## Install
 
 1. Open `chrome://extensions`.
-2. Enable Developer mode.
-3. Click "Load unpacked".
+2. Enable **Developer mode**.
+3. Click **"Load unpacked"**.
 4. Select the project folder you downloaded or cloned.
 5. Click the extension icon to open settings and configure a translation API.
 
-## Behavior
+## Usage
 
-- The extension first looks for an English auto-caption track (`kind=asr`) and falls back to other English caption tracks.
-- It fetches the full timedtext caption track, tries `fmt=json3`, and falls back to VTT parsing.
-- It prioritizes translating captions near the current playback position, then continues translating the rest of the video in the background.
-- If no English caption track exists, it shows a "not found" status instead of doing audio recognition.
-- DeepSeek is the default translation provider. Other OpenAI-compatible Chat Completions APIs can be used by selecting "Custom OpenAI-compatible API" and entering the API key, base URL, and model name.
+1. Navigate to any YouTube video with English captions.
+2. The extension automatically detects caption tracks (prefers auto-generated `asr`, falls back to manual tracks).
+3. Bilingual subtitles appear on the video in real time as captions are translated.
+4. If no English caption track is found, a "not found" status is displayed.
+
+## Configuration
+
+Open the extension's options page (click the extension icon → settings) to configure:
+
+| Setting | Description |
+|---|---|
+| **Translation Provider** | DeepSeek / Gemini / Custom OpenAI-compatible |
+| **API Key** | Your API key for the selected provider |
+| **Base URL** | API endpoint (auto-filled for DeepSeek & Gemini) |
+| **Model** | Model name (auto-filled for DeepSeek & Gemini) |
+| **JSON Response Mode** | Request structured JSON output (disable if your provider doesn't support it) |
+| **ASR Correction** | Toggle AI-based speech recognition error correction |
+| **Source Language** | English |
+| **Target Language** | Simplified Chinese / Traditional Chinese |
+| **Font Scale** | Subtitle size multiplier (0.7× – 1.8×) |
+| **Subtitle Enabled** | Toggle the overlay on/off and hide native YouTube CC |
+
+## Project Structure
+
+```
+├── manifest.json          # Chrome MV3 extension manifest
+├── src/
+│   ├── background.js      # Service worker: handles API calls & message routing
+│   ├── content.js         # Content script: caption fetching, translation queue, overlay rendering
+│   ├── shared.js          # Shared utilities: settings, caption merging, prompt generation
+│   ├── overlay.css        # Subtitle overlay styles
+│   └── page-bridge.js     # Page-level script injected to intercept YouTube player data
+├── options/
+│   ├── options.html       # Settings UI
+│   ├── options.css        # Settings page styles
+│   └── options.js         # Settings page logic
+└── test/                  # Unit tests
+```
 
 ## Development
 
@@ -27,3 +79,7 @@ node --test
 ```
 
 If PowerShell blocks `npm.ps1`, use `node --test` directly or run `npm.cmd test`.
+
+## License
+
+MIT
