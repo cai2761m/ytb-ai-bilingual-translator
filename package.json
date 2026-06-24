@@ -1,0 +1,10 @@
+{
+  "name": "youtube-bilingual-deepseek-subtitles",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Chrome MV3 extension for YouTube bilingual subtitles using DeepSeek.",
+  "scripts": {
+    "test": "node --test"
+  },
+  "devDependencies": {}
+}

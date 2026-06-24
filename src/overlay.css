@@ -1,0 +1,73 @@
+html.ytbt-hide-native-captions .ytp-caption-window-container,
+html.ytbt-hide-native-captions .caption-window {
+  display: none !important;
+}
+
+.ytbt-overlay {
+  --ytbt-font-scale: 1;
+  position: absolute;
+  left: 50%;
+  bottom: calc(8% + 44px);
+  z-index: 2147483646;
+  width: min(92%, 1100px);
+  transform: translateX(-50%);
+  pointer-events: none;
+  text-align: center;
+  color: #fff;
+  font-family: Arial, "Microsoft YaHei", sans-serif;
+  line-height: 1.28;
+  text-shadow:
+    0 2px 4px rgba(0, 0, 0, 0.9),
+    0 0 3px rgba(0, 0, 0, 0.95);
+}
+
+.ytbt-overlay[hidden] {
+  display: none !important;
+}
+
+.ytbt-lines {
+  display: inline-block;
+  max-width: 100%;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.36);
+  backdrop-filter: blur(2px);
+}
+
+.ytbt-cn {
+  font-size: calc(28px * var(--ytbt-font-scale));
+  font-weight: 700;
+  word-break: break-word;
+}
+
+.ytbt-en {
+  margin-top: 3px;
+  font-size: calc(18px * var(--ytbt-font-scale));
+  font-weight: 600;
+  opacity: 0.92;
+  word-break: break-word;
+}
+
+.ytbt-status {
+  display: inline-block;
+  max-width: min(88vw, 760px);
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.58);
+  font-size: calc(16px * var(--ytbt-font-scale));
+  font-weight: 600;
+}
+
+.ytbt-overlay.ytbt-no-status .ytbt-status,
+.ytbt-overlay.ytbt-no-cue .ytbt-lines {
+  display: none;
+}
+
+.ytbt-overlay.ytbt-loading .ytbt-cn {
+  opacity: 0.82;
+}
+
+body.ytbt-fullscreen .ytbt-overlay,
+.html5-video-player.ytp-fullscreen .ytbt-overlay {
+  bottom: calc(9% + 42px);
+}

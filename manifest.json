@@ -1,0 +1,32 @@
+{
+  "manifest_version": 3,
+  "name": "YouTube Bilingual DeepSeek Subtitles",
+  "version": "0.1.0",
+  "description": "Generate Chinese-English bilingual subtitles on YouTube with DeepSeek translation.",
+  "permissions": ["storage"],
+  "host_permissions": [
+    "https://www.youtube.com/*",
+    "https://api.deepseek.com/*"
+  ],
+  "background": {
+    "service_worker": "src/background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://www.youtube.com/*"],
+      "js": ["src/shared.js", "src/content.js"],
+      "css": ["src/overlay.css"],
+      "run_at": "document_start"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["src/page-bridge.js"],
+      "matches": ["https://www.youtube.com/*"]
+    }
+  ],
+  "options_page": "options/options.html",
+  "action": {
+    "default_title": "YouTube Bilingual Subtitles"
+  }
+}

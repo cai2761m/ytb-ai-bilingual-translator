@@ -1,0 +1,24 @@
+{
+  "events": [
+    {
+      "tStartMs": 0,
+      "dDurationMs": 900,
+      "segs": [{ "utf8": "Hello" }]
+    },
+    {
+      "tStartMs": 950,
+      "dDurationMs": 900,
+      "segs": [{ "utf8": " world." }]
+    },
+    {
+      "tStartMs": 2500,
+      "dDurationMs": 800,
+      "segs": [{ "utf8": "This is" }]
+    },
+    {
+      "tStartMs": 3200,
+      "dDurationMs": 900,
+      "segs": [{ "utf8": " a test &amp; demo" }]
+    }
+  ]
+}

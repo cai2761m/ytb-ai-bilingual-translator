@@ -1,0 +1,922 @@
+(function runContentScript() {
+  "use strict";
+
+  const Core = globalThis.YTBTCore;
+  const CHANNEL = "__ytbt_player_response__";
+  const BATCH_SIZE = 30;
+  const MAX_PARALLEL_BATCHES = 2;
+  const PRIORITY_WINDOW_MS = 120000;
+  const URGENT_RESCHEDULE_MS = 1000;
+
+  const state = {
+    settings: Object.assign({}, Core.DEFAULT_SETTINGS),
+    lastPlayerResponse: null,
+    videoId: "",
+    track: null,
+    transcript: null,
+    trackFingerprint: "",
+    cues: [],
+    queue: [],
+    inFlight: new Map(),
+    batchSerial: 0,
+    loadingToken: 0,
+    statusText: "",
+    overlay: null,
+    overlayParts: null,
+    video: null,
+    lastUrgentScheduleAt: 0,
+    bridgeInjected: false,
+    pumping: false
+  };
+
+  init();
+
+  async function init() {
+    await loadSettings();
+    applySettings();
+    injectPageBridge();
+    bindPageMessages();
+    bindStorageChanges();
+    setInterval(watchVideoElement, 1000);
+    setInterval(() => {
+      if (state.cues.length) {
+        scheduleTranslations(getCurrentTimeMs(), false);
+      }
+    }, 5000);
+    requestAnimationFrame(renderLoop);
+  }
+
+  function storageGet(defaults) {
+    return new Promise((resolve) => chrome.storage.local.get(defaults, resolve));
+  }
+
+  async function loadSettings() {
+    const stored = await storageGet(Core.DEFAULT_SETTINGS);
+    state.settings = normalizeSettings(stored);
+  }
+
+  function normalizeSettings(settings) {
+    const merged = Object.assign({}, Core.DEFAULT_SETTINGS, settings || {});
+    const fontScale = Number(merged.fontScale);
+    merged.fontScale = Number.isFinite(fontScale) ? Math.min(1.8, Math.max(0.7, fontScale)) : 1;
+    merged.subtitleEnabled = merged.subtitleEnabled !== false;
+    merged.targetLanguage = merged.targetLanguage || Core.DEFAULT_SETTINGS.targetLanguage;
+    merged.sourceLanguage = merged.sourceLanguage || Core.DEFAULT_SETTINGS.sourceLanguage;
+    return merged;
+  }
+
+  function bindStorageChanges() {
+    chrome.storage.onChanged.addListener((changes, areaName) => {
+      if (areaName !== "local") {
+        return;
+      }
+
+      let changed = false;
+      for (const key of Object.keys(Core.DEFAULT_SETTINGS)) {
+        if (changes[key]) {
+          state.settings[key] = changes[key].newValue;
+          changed = true;
+        }
+      }
+
+      if (!changed) {
+        return;
+      }
+
+      state.settings = normalizeSettings(state.settings);
+      applySettings();
+
+      if (changes.deepseekApiKey || changes.targetLanguage || changes.sourceLanguage || changes.cacheVersion) {
+        for (const cue of state.cues) {
+          if (cue.status === "failed" || !cue.translatedText) {
+            cue.status = "pending";
+            cue.translatedText = "";
+          }
+        }
+        state.queue = [];
+        scheduleTranslations(getCurrentTimeMs(), true);
+      }
+
+      if (changes.subtitleEnabled && state.settings.subtitleEnabled && state.lastPlayerResponse) {
+        handlePlayerResponse(state.lastPlayerResponse);
+      }
+    });
+  }
+
+  function applySettings() {
+    document.documentElement.classList.toggle(
+      "ytbt-hide-native-captions",
+      Boolean(state.settings.subtitleEnabled)
+    );
+
+    if (state.overlay) {
+      state.overlay.style.setProperty("--ytbt-font-scale", String(state.settings.fontScale));
+      state.overlay.hidden = !state.settings.subtitleEnabled;
+    }
+  }
+
+  function injectPageBridge() {
+    if (state.bridgeInjected) {
+      return;
+    }
+
+    const root = document.documentElement || document.head || document.body;
+    if (!root) {
+      setTimeout(injectPageBridge, 50);
+      return;
+    }
+
+    state.bridgeInjected = true;
+    const script = document.createElement("script");
+    script.src = chrome.runtime.getURL("src/page-bridge.js");
+    script.async = false;
+    script.onload = () => script.remove();
+    root.appendChild(script);
+  }
+
+  function bindPageMessages() {
+    window.addEventListener("message", (event) => {
+      if (event.source !== window || event.origin !== window.location.origin) {
+        return;
+      }
+
+      const data = event.data;
+      if (!data || data.channel !== CHANNEL || data.type !== "PLAYER_RESPONSE") {
+        return;
+      }
+
+      handlePlayerResponse(data);
+    });
+  }
+
+  async function handlePlayerResponse(payload) {
+    state.lastPlayerResponse = payload;
+
+    if (!state.settings.subtitleEnabled) {
+      setStatus("");
+      return;
+    }
+
+    const videoId = String(payload.videoId || "");
+    const tracks = Array.isArray(payload.captionTracks) ? payload.captionTracks : [];
+    const transcript = payload.transcript || null;
+    const track = selectEnglishTrack(tracks);
+
+    if (!track && !hasTranscriptApi(transcript)) {
+      resetVideoState(videoId, null, "");
+      setStatus("未找到英文字幕轨道：这个视频可能没有 YouTube 英文自动字幕。");
+      return;
+    }
+
+    const trackFingerprint = track
+      ? Core.fingerprintText([track.baseUrl, track.languageCode, track.kind, track.vssId].join("|"))
+      : Core.fingerprintText(["transcript", transcript.params || videoId].join("|"));
+
+    if (videoId === state.videoId && trackFingerprint === state.trackFingerprint && state.cues.length) {
+      return;
+    }
+
+    resetVideoState(videoId, track, trackFingerprint, transcript);
+    await loadCaptionTrack(videoId, track, trackFingerprint, transcript);
+  }
+
+  function resetVideoState(videoId, track, trackFingerprint, transcript) {
+    state.videoId = videoId || "";
+    state.track = track;
+    state.transcript = transcript || null;
+    state.trackFingerprint = trackFingerprint || "";
+    state.cues = [];
+    state.queue = [];
+    state.inFlight.clear();
+    state.statusText = "";
+    state.loadingToken += 1;
+  }
+
+  function selectEnglishTrack(tracks) {
+    const candidates = tracks
+      .filter((track) => track && track.baseUrl && isEnglishTrack(track))
+      .sort((left, right) => scoreTrack(left) - scoreTrack(right));
+
+    return candidates[0] || null;
+  }
+
+  function isEnglishTrack(track) {
+    const languageCode = String(track.languageCode || "").toLowerCase();
+    const vssId = String(track.vssId || "").toLowerCase();
+    const name = String(track.name || "").toLowerCase();
+    return languageCode === "en" || languageCode.startsWith("en-") || vssId.includes(".en") || name.includes("english");
+  }
+
+  function scoreTrack(track) {
+    const languageCode = String(track.languageCode || "").toLowerCase();
+    const isAsr = String(track.kind || "").toLowerCase() === "asr";
+    const languageScore = languageCode === "en" ? 0 : languageCode.startsWith("en-") ? 2 : 10;
+    return (isAsr ? 0 : 20) + languageScore;
+  }
+
+  async function loadCaptionTrack(videoId, track, trackFingerprint, transcript) {
+    const token = state.loadingToken;
+    setStatus("正在读取 YouTube 字幕轨道...");
+
+    try {
+      const rawCues = await fetchCaptionData(track, videoId, transcript);
+      if (token !== state.loadingToken || videoId !== state.videoId || trackFingerprint !== state.trackFingerprint) {
+        return;
+      }
+
+      const merged = Core.mergeCaptionFragments(rawCues);
+      state.cues = merged;
+
+      if (!merged.length) {
+        setStatus("找到字幕轨道，但没有可用的英文字幕内容。");
+        return;
+      }
+
+      setStatus(`正在预翻译字幕 0/${merged.length}...`);
+      scheduleTranslations(getCurrentTimeMs(), true);
+    } catch (error) {
+      if (token !== state.loadingToken) {
+        return;
+      }
+      setStatus(`字幕读取失败：${formatCaptionLoadError(error)}`);
+    }
+  }
+
+  async function fetchCaptionData(track, videoId, transcript) {
+    const errors = [];
+    let resolvedTranscript = transcript;
+
+    if (track && track.baseUrl) {
+      try {
+        return await fetchCaptionTrack(track, videoId);
+      } catch (error) {
+        errors.push(`timedtext: ${error.message || String(error)}`);
+        if (hasTranscriptApi(resolvedTranscript)) {
+          setStatus("字幕轨道返回空内容，正在尝试 YouTube transcript...");
+        }
+      }
+    }
+
+    if (hasTranscriptApi(resolvedTranscript)) {
+      try {
+        setStatus("页面字幕为空，正在尝试 Innertube player 字幕轨道...");
+        const innertubeTracks = await fetchInnertubePlayerCaptionTracks(videoId, resolvedTranscript.apiKey);
+        const innertubeTrack = selectEnglishTrack(innertubeTracks);
+        if (innertubeTrack) {
+          return await fetchCaptionTrack(innertubeTrack, videoId);
+        }
+        errors.push("innertube player: no English caption track");
+      } catch (error) {
+        errors.push(`innertube player: ${error.message || String(error)}`);
+      }
+    }
+
+    if (hasTranscriptApi(resolvedTranscript) && !hasTranscriptParams(resolvedTranscript)) {
+      try {
+        setStatus("正在查找 YouTube transcript 参数...");
+        resolvedTranscript = await fetchTranscriptParamsFromNext(videoId, resolvedTranscript);
+      } catch (error) {
+        errors.push(`transcript params: ${error.message || String(error)}`);
+      }
+    }
+
+    if (hasTranscriptParams(resolvedTranscript)) {
+      try {
+        return await fetchTranscriptTrack(resolvedTranscript);
+      } catch (error) {
+        errors.push(`transcript: ${error.message || String(error)}`);
+      }
+    }
+
+    throw new Error(errors.join("; ") || "No caption source is available.");
+  }
+
+  async function fetchCaptionTrack(track, videoId) {
+    const attempts = [
+      {
+        label: "json3",
+        format: "json3",
+        parse: (text) => Core.parseJson3Captions(parseCaptionJson(text))
+      },
+      {
+        label: "vtt",
+        format: "vtt",
+        parse: (text) => Core.parseVttCaptions(text)
+      },
+      {
+        label: "srv3",
+        format: "srv3",
+        parse: (text) => Core.parseXmlCaptions(text)
+      },
+      {
+        label: "ttml",
+        format: "ttml",
+        parse: (text) => Core.parseXmlCaptions(text)
+      },
+      {
+        label: "original",
+        format: null,
+        parse: (text) => {
+          const trimmed = text.trim();
+          if (trimmed.startsWith("{")) {
+            return Core.parseJson3Captions(parseCaptionJson(trimmed));
+          }
+          if (trimmed.startsWith("WEBVTT")) {
+            return Core.parseVttCaptions(trimmed);
+          }
+          return Core.parseXmlCaptions(trimmed);
+        }
+      }
+    ];
+
+    const errors = [];
+    const baseUrls = buildCaptionBaseUrls(track, videoId);
+
+    for (let urlIndex = 0; urlIndex < baseUrls.length; urlIndex += 1) {
+      const baseUrl = baseUrls[urlIndex];
+      const sourceLabel = urlIndex === 0 ? "player" : `legacy${urlIndex}`;
+
+      for (const attempt of attempts) {
+        try {
+          const label = `${sourceLabel}/${attempt.label}`;
+          const captionText = await fetchCaptionText(baseUrl, attempt.format, label);
+          const cues = attempt.parse(captionText);
+          if (cues.length) {
+            return cues;
+          }
+          errors.push(`${label}: no cues`);
+        } catch (error) {
+          errors.push(`${sourceLabel}/${attempt.label}: ${error.message || String(error)}`);
+        }
+      }
+    }
+
+    throw new Error(`No usable captions found (${errors.join("; ")}).`);
+  }
+
+  function parseCaptionJson(text) {
+    const trimmed = String(text || "").trim();
+    if (!trimmed) {
+      throw new Error("empty response");
+    }
+
+    try {
+      return JSON.parse(trimmed);
+    } catch (error) {
+      throw new Error(`invalid JSON (${error.message || String(error)})`);
+    }
+  }
+
+  function buildCaptionBaseUrls(track, videoId) {
+    const urls = [];
+    addCaptionUrl(urls, normalizeCaptionBaseUrl(track.baseUrl));
+
+    const languageCode = String(track.languageCode || "en").trim() || "en";
+    const languages = languageCode.toLowerCase().startsWith("en-")
+      ? [languageCode, "en"]
+      : [languageCode];
+    const inferredKind = String(track.kind || "").trim() || (String(track.vssId || "").startsWith("a.") ? "asr" : "");
+
+    if (videoId) {
+      for (const language of languages) {
+        addCaptionUrl(urls, buildLegacyCaptionUrl(videoId, language, inferredKind));
+        addCaptionUrl(urls, buildLegacyCaptionUrl(videoId, language, ""));
+      }
+    }
+
+    return urls;
+  }
+
+  function normalizeCaptionBaseUrl(baseUrl) {
+    try {
+      const url = new URL(baseUrl, window.location.href);
+      url.searchParams.delete("fmt");
+      url.searchParams.delete("tlang");
+      if (!url.searchParams.has("c")) {
+        url.searchParams.set("c", "WEB");
+      }
+      return url.toString();
+    } catch (error) {
+      return baseUrl || "";
+    }
+  }
+
+  function buildLegacyCaptionUrl(videoId, languageCode, kind) {
+    const url = new URL("https://www.youtube.com/api/timedtext");
+    url.searchParams.set("v", videoId);
+    url.searchParams.set("lang", languageCode);
+    url.searchParams.set("type", "track");
+    url.searchParams.set("c", "WEB");
+    if (kind) {
+      url.searchParams.set("kind", kind);
+    }
+    return url.toString();
+  }
+
+  function addCaptionUrl(urls, url) {
+    if (url && !urls.includes(url)) {
+      urls.push(url);
+    }
+  }
+
+  async function fetchInnertubePlayerCaptionTracks(videoId, apiKey) {
+    const url = new URL("https://www.youtube.com/youtubei/v1/player");
+    url.searchParams.set("prettyPrint", "false");
+    url.searchParams.set("key", apiKey);
+
+    const response = await fetch(url.toString(), {
+      method: "POST",
+      credentials: "include",
+      cache: "no-store",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        context: {
+          client: {
+            clientName: "ANDROID",
+            clientVersion: "20.10.38"
+          }
+        },
+        videoId
+      })
+    });
+
+    const text = await response.text();
+    if (!response.ok) {
+      throw new Error(`player request failed (${response.status}): ${text.slice(0, 160)}`);
+    }
+
+    const json = parseCaptionJson(text);
+    const renderer =
+      json &&
+      json.captions &&
+      json.captions.playerCaptionsTracklistRenderer;
+    const tracks = renderer && Array.isArray(renderer.captionTracks) ? renderer.captionTracks : [];
+
+    return tracks.map((track) => ({
+      baseUrl: track.baseUrl || "",
+      languageCode: track.languageCode || "",
+      kind: track.kind || "",
+      vssId: track.vssId || "",
+      name: textFromCaptionName(track.name),
+      isTranslatable: Boolean(track.isTranslatable)
+    }));
+  }
+
+  function textFromCaptionName(name) {
+    if (!name) {
+      return "";
+    }
+    if (typeof name.simpleText === "string") {
+      return name.simpleText;
+    }
+    if (Array.isArray(name.runs)) {
+      return name.runs.map((run) => run.text || "").join("");
+    }
+    return "";
+  }
+
+  async function fetchCaptionText(baseUrl, format, label) {
+    const url = captionUrlWithFormat(baseUrl, format);
+    const response = await fetch(url, {
+      credentials: "include",
+      cache: "no-store",
+      headers: {
+        Accept: format === "json3" ? "application/json,text/plain,*/*" : "*/*"
+      }
+    });
+    const text = await response.text();
+    if (!response.ok) {
+      throw new Error(`Timedtext request failed (${response.status})`);
+    }
+    if (!text.trim()) {
+      throw new Error(`${label || format || "caption"} returned empty response`);
+    }
+    return text;
+  }
+
+  function captionUrlWithFormat(baseUrl, format) {
+    const url = new URL(baseUrl, window.location.href);
+    if (format) {
+      url.searchParams.set("fmt", format);
+    }
+    return url.toString();
+  }
+
+  function hasTranscriptApi(transcript) {
+    return Boolean(transcript && transcript.apiKey);
+  }
+
+  function hasTranscriptParams(transcript) {
+    return Boolean(transcript && transcript.params && transcript.apiKey);
+  }
+
+  async function fetchTranscriptParamsFromNext(videoId, transcript) {
+    const url = new URL("https://www.youtube.com/youtubei/v1/next");
+    url.searchParams.set("prettyPrint", "false");
+    url.searchParams.set("key", transcript.apiKey);
+
+    const response = await fetch(url.toString(), {
+      method: "POST",
+      credentials: "include",
+      cache: "no-store",
+      headers: buildInnertubeHeaders(transcript),
+      body: JSON.stringify({
+        context: transcript.context || {
+          client: {
+            clientName: "WEB",
+            clientVersion: "2.20240601.00.00"
+          }
+        },
+        videoId,
+        contentCheckOk: true,
+        racyCheckOk: true
+      })
+    });
+
+    const text = await response.text();
+    if (!response.ok) {
+      throw new Error(`next request failed (${response.status}): ${text.slice(0, 160)}`);
+    }
+
+    const json = parseCaptionJson(text);
+    const params = Core.findYouTubeTranscriptParams(json, 0);
+    if (!params) {
+      throw new Error("next response did not include transcript params");
+    }
+
+    return Object.assign({}, transcript, { params });
+  }
+
+  async function fetchTranscriptTrack(transcript) {
+    const url = new URL("https://www.youtube.com/youtubei/v1/get_transcript");
+    url.searchParams.set("prettyPrint", "false");
+    url.searchParams.set("key", transcript.apiKey);
+
+    const response = await fetch(url.toString(), {
+      method: "POST",
+      credentials: "include",
+      cache: "no-store",
+      headers: buildInnertubeHeaders(transcript),
+      body: JSON.stringify({
+        context: transcript.context || {
+          client: {
+            clientName: "WEB",
+            clientVersion: "2.20240601.00.00"
+          }
+        },
+        params: transcript.params
+      })
+    });
+
+    const text = await response.text();
+    if (!response.ok) {
+      throw new Error(`Transcript request failed (${response.status}): ${text.slice(0, 160)}`);
+    }
+    const json = parseCaptionJson(text);
+    const cues = Core.parseYouTubeTranscriptResponse(json);
+    if (!cues.length) {
+      throw new Error("Transcript response did not contain segments");
+    }
+    return cues;
+  }
+
+  function buildInnertubeHeaders(transcript) {
+    const headers = {
+      "Content-Type": "application/json"
+    };
+    if (transcript.clientName) {
+      headers["X-YouTube-Client-Name"] = String(transcript.clientName);
+    }
+    if (transcript.clientVersion) {
+      headers["X-YouTube-Client-Version"] = String(transcript.clientVersion);
+    }
+    if (transcript.visitorData || (transcript.context && transcript.context.client && transcript.context.client.visitorData)) {
+      headers["X-Goog-Visitor-Id"] = String(
+        transcript.visitorData || transcript.context.client.visitorData
+      );
+    }
+    headers["X-Origin"] = "https://www.youtube.com";
+    return headers;
+  }
+
+  function formatCaptionLoadError(error) {
+    const message = error && error.message ? error.message : String(error);
+    if (message.includes("returned empty response") || message.includes("No usable captions found")) {
+      return "YouTube 返回空字幕数据；已尝试 timedtext 和 transcript。请确认原生 CC 能显示英文字幕，或换一个有英文字幕的视频测试。";
+    }
+    return message;
+  }
+
+  function scheduleTranslations(anchorMs, resetQueue) {
+    if (!state.settings.subtitleEnabled || !state.cues.length) {
+      return;
+    }
+
+    if (!hasApiKey()) {
+      setStatus("请在扩展选项页填写 DeepSeek API Key。");
+      return;
+    }
+
+    if (resetQueue) {
+      state.queue = [];
+    }
+
+    const alreadyQueued = new Set();
+    for (const batch of state.queue) {
+      for (const cue of batch.cues) {
+        alreadyQueued.add(cue.id);
+      }
+    }
+    for (const batch of state.inFlight.values()) {
+      for (const cue of batch.cues) {
+        alreadyQueued.add(cue.id);
+      }
+    }
+
+    const pending = state.cues
+      .filter((cue) => cue.status === "pending" && !alreadyQueued.has(cue.id))
+      .sort((left, right) => priorityScore(left, anchorMs) - priorityScore(right, anchorMs));
+
+    for (let index = 0; index < pending.length; index += BATCH_SIZE) {
+      state.queue.push({ cues: pending.slice(index, index + BATCH_SIZE) });
+    }
+
+    pumpQueue();
+  }
+
+  function priorityScore(cue, anchorMs) {
+    if (cue.endMs >= anchorMs && cue.startMs <= anchorMs + PRIORITY_WINDOW_MS) {
+      return Math.abs(cue.startMs - anchorMs);
+    }
+    if (cue.startMs > anchorMs + PRIORITY_WINDOW_MS) {
+      return PRIORITY_WINDOW_MS + cue.startMs - anchorMs;
+    }
+    return PRIORITY_WINDOW_MS * 10 + (anchorMs - cue.endMs);
+  }
+
+  function pumpQueue() {
+    if (state.pumping || !state.settings.subtitleEnabled || !hasApiKey()) {
+      return;
+    }
+
+    state.pumping = true;
+    try {
+      while (state.inFlight.size < MAX_PARALLEL_BATCHES && state.queue.length) {
+        const queued = state.queue.shift();
+        const cues = queued.cues.filter((cue) => cue.status === "pending");
+        if (!cues.length) {
+          continue;
+        }
+
+        const batch = {
+          id: `${state.videoId}:${state.trackFingerprint}:${Date.now()}:${state.batchSerial += 1}`,
+          videoId: state.videoId,
+          trackFingerprint: state.trackFingerprint,
+          cues
+        };
+
+        for (const cue of cues) {
+          cue.status = "translating";
+        }
+
+        state.inFlight.set(batch.id, batch);
+        sendTranslationBatch(batch);
+      }
+      updateProgressStatus();
+    } finally {
+      state.pumping = false;
+    }
+  }
+
+  async function sendTranslationBatch(batch) {
+    try {
+      const response = await sendMessage({
+        type: "TRANSLATE_BATCH",
+        batchId: batch.id,
+        videoId: batch.videoId,
+        trackFingerprint: batch.trackFingerprint,
+        cues: batch.cues.map((cue) => ({
+          id: cue.id,
+          sourceText: cue.sourceText,
+          displaySourceText: cue.displaySourceText
+        }))
+      });
+
+      const currentBatch = state.inFlight.get(batch.id);
+      state.inFlight.delete(batch.id);
+
+      if (!currentBatch || currentBatch.videoId !== state.videoId || currentBatch.trackFingerprint !== state.trackFingerprint) {
+        pumpQueue();
+        return;
+      }
+
+      if (!response || response.ok === false) {
+        const error = response && response.errors && response.errors[0];
+        handleBatchFailure(currentBatch, error && error.message ? error.message : "翻译失败");
+      } else {
+        applyTranslations(currentBatch, response.items || []);
+      }
+    } catch (error) {
+      const currentBatch = state.inFlight.get(batch.id);
+      state.inFlight.delete(batch.id);
+
+      if (!currentBatch || currentBatch.videoId !== state.videoId || currentBatch.trackFingerprint !== state.trackFingerprint) {
+        pumpQueue();
+        return;
+      }
+
+      handleBatchFailure(currentBatch, error.message || String(error));
+    }
+
+    updateProgressStatus();
+    pumpQueue();
+  }
+
+  function sendMessage(message) {
+    return new Promise((resolve, reject) => {
+      chrome.runtime.sendMessage(message, (response) => {
+        const lastError = chrome.runtime.lastError;
+        if (lastError) {
+          reject(new Error(lastError.message));
+        } else {
+          resolve(response);
+        }
+      });
+    });
+  }
+
+  function applyTranslations(batch, items) {
+    const translatedById = new Map();
+    for (const item of items) {
+      if (item && item.id != null && item.translatedText) {
+        translatedById.set(String(item.id), Core.normalizeSubtitleText(item.translatedText));
+      }
+    }
+
+    for (const cue of batch.cues) {
+      const translatedText = translatedById.get(String(cue.id));
+      if (translatedText) {
+        cue.translatedText = translatedText;
+        cue.status = "translated";
+      } else {
+        cue.status = "failed";
+        cue.lastError = "DeepSeek did not return this cue.";
+      }
+    }
+  }
+
+  function handleBatchFailure(batch, message) {
+    for (const cue of batch.cues) {
+      if (cue.status === "translating") {
+        cue.status = "failed";
+        cue.lastError = message;
+      }
+    }
+    setStatus(message.includes("API Key") ? "请在扩展选项页填写 DeepSeek API Key。" : `翻译失败：${message}`);
+  }
+
+  function updateProgressStatus() {
+    if (!state.cues.length) {
+      return;
+    }
+
+    const done = state.cues.filter((cue) => cue.status === "translated").length;
+    const failed = state.cues.filter((cue) => cue.status === "failed").length;
+    const total = state.cues.length;
+
+    if (done === total) {
+      setStatus("");
+    } else if (failed && done + failed === total) {
+      setStatus(`部分字幕翻译失败，已完成 ${done}/${total}。`);
+    } else {
+      setStatus(`正在预翻译字幕 ${done}/${total}...`);
+    }
+  }
+
+  function hasApiKey() {
+    return Boolean(String(state.settings.deepseekApiKey || "").trim());
+  }
+
+  function watchVideoElement() {
+    const video = document.querySelector("video");
+    if (video === state.video) {
+      return;
+    }
+
+    if (state.video) {
+      state.video.removeEventListener("seeked", handleSeek);
+      state.video.removeEventListener("loadedmetadata", handleSeek);
+    }
+
+    state.video = video;
+    if (state.video) {
+      state.video.addEventListener("seeked", handleSeek);
+      state.video.addEventListener("loadedmetadata", handleSeek);
+    }
+  }
+
+  function handleSeek() {
+    scheduleTranslations(getCurrentTimeMs(), true);
+  }
+
+  function getCurrentTimeMs() {
+    const video = state.video || document.querySelector("video");
+    if (!video || !Number.isFinite(video.currentTime)) {
+      return 0;
+    }
+    return video.currentTime * 1000;
+  }
+
+  function renderLoop() {
+    ensureOverlay();
+    updateOverlay();
+    requestAnimationFrame(renderLoop);
+  }
+
+  function ensureOverlay() {
+    const player = document.querySelector(".html5-video-player") || document.querySelector("#movie_player");
+    if (!player) {
+      return null;
+    }
+
+    if (state.overlay && state.overlay.parentElement === player) {
+      return state.overlay;
+    }
+
+    const overlay = state.overlay || document.createElement("div");
+    overlay.className = "ytbt-overlay ytbt-no-cue ytbt-no-status";
+    overlay.setAttribute("aria-live", "polite");
+    overlay.style.setProperty("--ytbt-font-scale", String(state.settings.fontScale));
+    overlay.innerHTML = [
+      '<div class="ytbt-lines">',
+      '  <div class="ytbt-cn"></div>',
+      '  <div class="ytbt-en"></div>',
+      "</div>",
+      '<div class="ytbt-status"></div>'
+    ].join("");
+
+    state.overlay = overlay;
+    state.overlayParts = {
+      cn: overlay.querySelector(".ytbt-cn"),
+      en: overlay.querySelector(".ytbt-en"),
+      status: overlay.querySelector(".ytbt-status")
+    };
+    player.appendChild(overlay);
+    applySettings();
+    return overlay;
+  }
+
+  function updateOverlay() {
+    const overlay = state.overlay;
+    const parts = state.overlayParts;
+    if (!overlay || !parts) {
+      return;
+    }
+
+    if (!state.settings.subtitleEnabled) {
+      overlay.hidden = true;
+      return;
+    }
+
+    const timeMs = getCurrentTimeMs();
+    const cue = Core.findCueAtTime(state.cues, timeMs);
+    const hasCue = Boolean(cue);
+    const statusText = hasCue ? "" : state.statusText;
+
+    overlay.hidden = false;
+    overlay.classList.toggle("ytbt-no-cue", !hasCue);
+    overlay.classList.toggle("ytbt-no-status", !statusText);
+    overlay.classList.toggle("ytbt-loading", hasCue && cue.status !== "translated");
+
+    if (hasCue) {
+      parts.cn.textContent = cue.translatedText || fallbackTextForCue(cue);
+      parts.en.textContent = cue.displaySourceText || cue.sourceText || "";
+
+      if (cue.status === "pending" && Date.now() - state.lastUrgentScheduleAt > URGENT_RESCHEDULE_MS) {
+        state.lastUrgentScheduleAt = Date.now();
+        scheduleTranslations(timeMs, true);
+      }
+    } else {
+      parts.cn.textContent = "";
+      parts.en.textContent = "";
+    }
+
+    parts.status.textContent = statusText;
+  }
+
+  function fallbackTextForCue(cue) {
+    if (!hasApiKey()) {
+      return "请填写 DeepSeek API Key";
+    }
+    if (cue.status === "failed") {
+      return "翻译失败";
+    }
+    return "翻译中...";
+  }
+
+  function setStatus(text) {
+    state.statusText = text || "";
+  }
+})();

@@ -1,0 +1,123 @@
+:root {
+  color-scheme: light;
+  font-family: Arial, "Microsoft YaHei", sans-serif;
+  color: #111827;
+  background: #f5f7fb;
+}
+
+body {
+  margin: 0;
+}
+
+.page {
+  width: min(720px, calc(100vw - 32px));
+  margin: 36px auto;
+}
+
+header {
+  margin-bottom: 18px;
+}
+
+h1 {
+  margin: 0 0 8px;
+  font-size: 28px;
+}
+
+h2 {
+  margin: 0 0 8px;
+  font-size: 18px;
+}
+
+p {
+  margin: 0;
+  color: #4b5563;
+  line-height: 1.6;
+}
+
+.panel,
+.notes {
+  border: 1px solid #d8dee9;
+  border-radius: 8px;
+  background: #fff;
+  padding: 20px;
+}
+
+.notes {
+  margin-top: 16px;
+}
+
+.field {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 16px;
+  font-weight: 700;
+}
+
+.field input,
+.field select {
+  box-sizing: border-box;
+  width: 100%;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  padding: 10px 12px;
+  font: inherit;
+}
+
+.field input[type="range"] {
+  padding: 0;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+.toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 4px 0 20px;
+  font-weight: 700;
+}
+
+.toggle input {
+  width: 18px;
+  height: 18px;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+button {
+  border: 0;
+  border-radius: 6px;
+  background: #2563eb;
+  color: #fff;
+  padding: 10px 14px;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+button.secondary {
+  border: 1px solid #cbd5e1;
+  background: #fff;
+  color: #1f2937;
+}
+
+.status {
+  min-height: 24px;
+  margin-top: 14px;
+  font-weight: 700;
+  color: #047857;
+}
+
+@media (max-width: 620px) {
+  .grid {
+    grid-template-columns: 1fr;
+  }
+}

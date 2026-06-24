@@ -1,0 +1,162 @@
+(function bridgeYouTubePlayerResponse() {
+  "use strict";
+
+  const CHANNEL = "__ytbt_player_response__";
+  let lastSignature = "";
+
+  function textFromName(name) {
+    if (!name) {
+      return "";
+    }
+    if (typeof name.simpleText === "string") {
+      return name.simpleText;
+    }
+    if (Array.isArray(name.runs)) {
+      return name.runs.map((run) => run.text || "").join("");
+    }
+    return "";
+  }
+
+  function readPlayerResponse() {
+    if (window.ytInitialPlayerResponse) {
+      return window.ytInitialPlayerResponse;
+    }
+
+    const raw = window.ytplayer &&
+      window.ytplayer.config &&
+      window.ytplayer.config.args &&
+      window.ytplayer.config.args.player_response;
+
+    if (typeof raw === "string") {
+      try {
+        return JSON.parse(raw);
+      } catch (error) {
+        return null;
+      }
+    }
+
+    return null;
+  }
+
+  function readYtcfgValue(name) {
+    try {
+      if (window.ytcfg && typeof window.ytcfg.get === "function") {
+        return window.ytcfg.get(name);
+      }
+    } catch (error) {
+      return null;
+    }
+    return null;
+  }
+
+  function findTranscriptParams(value, depth) {
+    if (!value || depth > 14) {
+      return "";
+    }
+
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        const params = findTranscriptParams(item, depth + 1);
+        if (params) {
+          return params;
+        }
+      }
+      return "";
+    }
+
+    if (typeof value !== "object") {
+      return "";
+    }
+
+    if (
+      value.getTranscriptEndpoint &&
+      typeof value.getTranscriptEndpoint.params === "string"
+    ) {
+      return value.getTranscriptEndpoint.params;
+    }
+
+    for (const item of Object.values(value)) {
+      const params = findTranscriptParams(item, depth + 1);
+      if (params) {
+        return params;
+      }
+    }
+
+    return "";
+  }
+
+  function sanitizeTrack(track) {
+    return {
+      baseUrl: track.baseUrl || "",
+      languageCode: track.languageCode || "",
+      kind: track.kind || "",
+      vssId: track.vssId || "",
+      name: textFromName(track.name),
+      isTranslatable: Boolean(track.isTranslatable)
+    };
+  }
+
+  function emitPlayerResponse() {
+    const response = readPlayerResponse();
+    const tracks =
+      response &&
+      response.captions &&
+      response.captions.playerCaptionsTracklistRenderer &&
+      response.captions.playerCaptionsTracklistRenderer.captionTracks;
+
+    const videoId =
+      response &&
+      response.videoDetails &&
+      response.videoDetails.videoId;
+
+    if (!videoId) {
+      return;
+    }
+
+    const sanitizedTracks = Array.isArray(tracks) ? tracks.map(sanitizeTrack) : [];
+    const transcriptParams = findTranscriptParams(window.ytInitialData, 0);
+    const innertubeContext =
+      readYtcfgValue("INNERTUBE_CONTEXT") ||
+      {
+        client: {
+          clientName: readYtcfgValue("INNERTUBE_CLIENT_NAME") || "WEB",
+          clientVersion: readYtcfgValue("INNERTUBE_CLIENT_VERSION") || "2.20240601.00.00",
+          hl: readYtcfgValue("HL") || "en",
+          gl: readYtcfgValue("GL") || "US",
+          visitorData: readYtcfgValue("VISITOR_DATA") || ""
+        }
+      };
+
+    const signature = `${videoId}:${sanitizedTracks.map((track) => track.baseUrl).join("|")}:${transcriptParams}`;
+    if (signature === lastSignature) {
+      return;
+    }
+
+    lastSignature = signature;
+    window.postMessage(
+      {
+        channel: CHANNEL,
+        type: "PLAYER_RESPONSE",
+        videoId,
+        title: response.videoDetails && response.videoDetails.title,
+        captionTracks: sanitizedTracks,
+        transcript: {
+          params: transcriptParams,
+          apiKey: readYtcfgValue("INNERTUBE_API_KEY") || "",
+          context: innertubeContext,
+          clientName: readYtcfgValue("INNERTUBE_CLIENT_NAME") || "",
+          clientVersion: readYtcfgValue("INNERTUBE_CLIENT_VERSION") || "",
+          visitorData: readYtcfgValue("VISITOR_DATA") || ""
+        }
+      },
+      window.location.origin
+    );
+  }
+
+  window.addEventListener("yt-navigate-finish", () => setTimeout(emitPlayerResponse, 250));
+  window.addEventListener("yt-page-data-updated", () => setTimeout(emitPlayerResponse, 250));
+  window.addEventListener("popstate", () => setTimeout(emitPlayerResponse, 250));
+  document.addEventListener("readystatechange", emitPlayerResponse);
+  setInterval(emitPlayerResponse, 1500);
+  emitPlayerResponse();
+})();
