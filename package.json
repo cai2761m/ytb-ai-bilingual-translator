@@ -2,7 +2,7 @@
   "name": "ytb-ai-bilingual-translator",
   "version": "0.1.0",
   "private": true,
-  "description": "AI-powered bilingual subtitle translator for YouTube.",
+  "description": "ytb-ai-bilingual-translator",
   "scripts": {
     "test": "node --test"
   },
