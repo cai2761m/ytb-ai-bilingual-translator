@@ -5,11 +5,15 @@
   const CHANNEL = "__ytbt_player_response__";
   const BATCH_SIZE = 30;
   const GEMINI_BATCH_SIZE = 8;
+  const CUSTOM_BATCH_SIZE = 15;
   const RETRY_BATCH_SIZE = 5;
   const GEMINI_RETRY_BATCH_SIZE = 3;
+  const CUSTOM_RETRY_BATCH_SIZE = 5;
   const MAX_CUE_TRANSLATION_RETRIES = 2;
   const MAX_PARALLEL_BATCHES = 2;
   const GEMINI_MAX_PARALLEL_BATCHES = 1;
+  const CUSTOM_MAX_PARALLEL_BATCHES = 4;
+  const TRANSLATION_MESSAGE_TIMEOUT_MS = 130000;
   const PRIORITY_WINDOW_MS = 120000;
   const URGENT_RESCHEDULE_MS = 1000;
   const RATE_LIMIT_BACKOFF_MS = 60000;
@@ -246,9 +250,7 @@
       return;
     }
 
-    const trackFingerprint = track
-      ? Core.fingerprintText([track.baseUrl, track.languageCode, track.kind, track.vssId].join("|"))
-      : Core.fingerprintText(["transcript", transcript.params || videoId].join("|"));
+    const trackFingerprint = makeStableTrackFingerprint(videoId, track, transcript);
 
     if (videoId === state.videoId && trackFingerprint === state.trackFingerprint && state.cues.length) {
       return;
@@ -268,6 +270,28 @@
     state.inFlight.clear();
     state.statusText = "";
     state.loadingToken += 1;
+  }
+
+  function makeStableTrackFingerprint(videoId, track, transcript) {
+    const sourceLang = String(state.settings.sourceLanguage || "en").toLowerCase();
+    if (track) {
+      return Core.fingerprintText([
+        "track",
+        videoId || "",
+        sourceLang,
+        String(track.languageCode || "").toLowerCase(),
+        String(track.kind || "").toLowerCase(),
+        String(track.vssId || "").toLowerCase(),
+        String(track.name || "").toLowerCase()
+      ].join("|"));
+    }
+
+    return Core.fingerprintText([
+      "transcript",
+      videoId || "",
+      sourceLang,
+      transcript && transcript.apiKey ? "api" : ""
+    ].join("|"));
   }
 
   function selectSourceTrack(tracks) {
@@ -841,7 +865,19 @@
 
   function sendMessage(message) {
     return new Promise((resolve, reject) => {
+      let settled = false;
+      const timeout = setTimeout(() => {
+        settled = true;
+        reject(new Error("Translation request timeout: background worker did not respond within 130 seconds."));
+      }, TRANSLATION_MESSAGE_TIMEOUT_MS);
+
       chrome.runtime.sendMessage(message, (response) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTimeout(timeout);
+
         const lastError = chrome.runtime.lastError;
         if (lastError) {
           reject(new Error(lastError.message));
@@ -934,16 +970,29 @@
     return currentTranslationConfig().apiStyle === "gemini";
   }
 
+  function isCustomOpenAiProvider() {
+    return currentTranslationConfig().provider === "custom";
+  }
+
   function currentBatchSize() {
-    return isGeminiProvider() ? GEMINI_BATCH_SIZE : BATCH_SIZE;
+    if (isGeminiProvider()) {
+      return GEMINI_BATCH_SIZE;
+    }
+    return isCustomOpenAiProvider() ? CUSTOM_BATCH_SIZE : BATCH_SIZE;
   }
 
   function currentRetryBatchSize() {
-    return isGeminiProvider() ? GEMINI_RETRY_BATCH_SIZE : RETRY_BATCH_SIZE;
+    if (isGeminiProvider()) {
+      return GEMINI_RETRY_BATCH_SIZE;
+    }
+    return isCustomOpenAiProvider() ? CUSTOM_RETRY_BATCH_SIZE : RETRY_BATCH_SIZE;
   }
 
   function currentMaxParallelBatches() {
-    return isGeminiProvider() ? GEMINI_MAX_PARALLEL_BATCHES : MAX_PARALLEL_BATCHES;
+    if (isGeminiProvider()) {
+      return GEMINI_MAX_PARALLEL_BATCHES;
+    }
+    return isCustomOpenAiProvider() ? CUSTOM_MAX_PARALLEL_BATCHES : MAX_PARALLEL_BATCHES;
   }
 
   function requeueBatchForBackoff(batch, message) {
@@ -1050,12 +1099,17 @@
 
     const done = state.cues.filter((cue) => cue.status === "translated").length;
     const failed = state.cues.filter((cue) => cue.status === "failed").length;
+    const translating = state.cues.filter((cue) => cue.status === "translating").length;
     const total = state.cues.length;
 
     if (done === total) {
       setStatus("");
-    } else if (failed && done + failed === total) {
-      setStatus(`部分字幕翻译失败，已完成 ${done}/${total}。`);
+    } else if (failed) {
+      const failedCue = state.cues.find((cue) => cue.status === "failed" && cue.lastError);
+      const detail = failedCue ? `：${simplifyTranslationError(failedCue.lastError)}` : "";
+      setStatus(`部分字幕翻译失败，已完成 ${done}/${total}，失败 ${failed}${detail}`);
+    } else if (translating) {
+      setStatus(`正在翻译字幕 ${done}/${total}（${translating} 条处理中）...`);
     } else {
       setStatus(`正在预翻译字幕 ${done}/${total}...`);
     }

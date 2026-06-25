@@ -20,7 +20,7 @@
 
   const DEEPSEEK_MODEL = "deepseek-v4-flash";
   const GEMINI_MODEL = "gemini-3.5-flash";
-  const MERGE_VERSION = "2";
+  const MERGE_VERSION = "3";
   const DEEPSEEK_BASE_URL = "https://api.deepseek.com";
   const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
 
@@ -62,7 +62,7 @@
   const TRANSLATION_FATAL_RE =
     /API Key|not configured|base URL|model|401|403|quota|insufficient/i;
   const TRANSLATION_RETRYABLE_RE =
-    /429|rate limit|too many requests|timeout|aborted|network|failed to fetch|non-JSON|empty content|did not contain usable translations|truncated|finish_reason|request failed \(5\d\d\)/i;
+    /429|rate limit|too many requests|timeout|aborted|network|failed to fetch|non-JSON|invalid translation JSON|JSON at position|Unexpected .*JSON|Expected .*JSON|empty content|did not contain usable translations|truncated|finish_reason|request failed \(5\d\d\)/i;
 
   function classifyTranslationError(message) {
     const text = String(message || "");
@@ -125,6 +125,87 @@
   const DISPLAY_CLAUSE_END_WORDS = new Set(["bad", "done", "fine", "good", "ok", "okay", "work", "works"]);
   const DISPLAY_DISCOURSE_WORDS = new Set(["like", "so", "but", "then", "now", "well"]);
   const DISPLAY_PRONOUN_WORDS = new Set(["i", "we", "you", "he", "she", "they", "it", "this", "that", "there"]);
+  const DANGLING_END_WORDS = new Set([
+    ...DISPLAY_PREPOSITION_WORDS,
+    "a",
+    "an",
+    "and",
+    "any",
+    "are",
+    "as",
+    "be",
+    "because",
+    "been",
+    "being",
+    "but",
+    "can",
+    "could",
+    "did",
+    "do",
+    "does",
+    "each",
+    "every",
+    "few",
+    "had",
+    "has",
+    "have",
+    "her",
+    "his",
+    "if",
+    "is",
+    "its",
+    "may",
+    "might",
+    "more",
+    "most",
+    "much",
+    "must",
+    "my",
+    "or",
+    "our",
+    "should",
+    "so",
+    "some",
+    "such",
+    "than",
+    "that",
+    "the",
+    "their",
+    "these",
+    "this",
+    "those",
+    "too",
+    "very",
+    "was",
+    "were",
+    "when",
+    "which",
+    "while",
+    "who",
+    "will",
+    "would",
+    "your"
+  ]);
+  const CONTINUATION_START_WORDS = new Set([
+    ...DISPLAY_PREPOSITION_WORDS,
+    "and",
+    "because",
+    "but",
+    "if",
+    "or",
+    "so",
+    "than",
+    "that",
+    "then",
+    "though",
+    "until",
+    "when",
+    "where",
+    "which",
+    "while",
+    "who",
+    "whose"
+  ]);
   const TAG_RE = /<[^>]+>/g;
 
   function decodeHtmlEntities(value) {
@@ -557,12 +638,34 @@
     };
   }
 
+  function lastSubtitleWord(value) {
+    const words = normalizeSubtitleText(value).split(/\s+/).filter(Boolean);
+    return words.length ? cleanDisplayWord(words[words.length - 1]) : "";
+  }
+
+  function firstSubtitleWord(value) {
+    const words = normalizeSubtitleText(value).split(/\s+/).filter(Boolean);
+    return words.length ? cleanDisplayWord(words[0]) : "";
+  }
+
+  function shouldKeepJoiningFragments(groupText, nextText) {
+    if (!groupText || SENTENCE_END_RE.test(groupText)) {
+      return false;
+    }
+
+    const lastWord = lastSubtitleWord(groupText);
+    const firstWord = firstSubtitleWord(nextText);
+    return DANGLING_END_WORDS.has(lastWord) || CONTINUATION_START_WORDS.has(firstWord);
+  }
+
   function mergeCaptionFragments(cues, options) {
     const settings = Object.assign(
       {
         maxGapMs: 800,
-        maxDurationMs: 8000,
-        maxChars: 120
+        maxDurationMs: 10000,
+        maxChars: 180,
+        hardMaxDurationMs: 16000,
+        hardMaxChars: 260
       },
       options || {}
     );
@@ -606,10 +709,17 @@
       const gapMs = cue.startMs - previous.endMs;
       const combinedText = `${groupText} ${cue.sourceText}`.replace(/\s+/g, " ").trim();
       const combinedDuration = cue.endMs - normalized[groupStart].startMs;
+      const exceedsSoftLimit =
+        combinedDuration > settings.maxDurationMs ||
+        combinedText.length > settings.maxChars;
+      const exceedsHardLimit =
+        combinedDuration > settings.hardMaxDurationMs ||
+        combinedText.length > settings.hardMaxChars;
+      const shouldKeepJoining =
+        exceedsSoftLimit && !exceedsHardLimit && shouldKeepJoiningFragments(groupText, cue.sourceText);
       const shouldBreakBefore =
         gapMs > settings.maxGapMs ||
-        combinedDuration > settings.maxDurationMs ||
-        combinedText.length > settings.maxChars ||
+        (exceedsSoftLimit && !shouldKeepJoining) ||
         SENTENCE_END_RE.test(groupText);
 
       if (shouldBreakBefore) {
@@ -776,8 +886,89 @@
     return JSON.parse(raw);
   }
 
+  function unescapeJsonishString(value) {
+    return String(value || "").replace(/\\(["\\/bfnrt])/g, (match, escaped) => {
+      if (escaped === "b") {
+        return "\b";
+      }
+      if (escaped === "f") {
+        return "\f";
+      }
+      if (escaped === "n") {
+        return "\n";
+      }
+      if (escaped === "r") {
+        return "\r";
+      }
+      if (escaped === "t") {
+        return "\t";
+      }
+      return escaped;
+    });
+  }
+
+  function extractJsonishStringProperty(fragment, key) {
+    const pattern = new RegExp(`"${key}"\\s*:\\s*"`, "i");
+    const match = pattern.exec(fragment);
+    if (!match) {
+      return "";
+    }
+
+    const start = match.index + match[0].length;
+    for (let index = start; index < fragment.length; index += 1) {
+      if (fragment[index] !== '"' || fragment[index - 1] === "\\") {
+        continue;
+      }
+      const rest = fragment.slice(index + 1).trimStart();
+      if (!rest || rest[0] === "}" || rest[0] === "]" || rest[0] === ",") {
+        return unescapeJsonishString(fragment.slice(start, index));
+      }
+    }
+
+    return unescapeJsonishString(fragment.slice(start));
+  }
+
+  function parseJsonishTranslationItems(content) {
+    const raw = String(content || "");
+    const items = [];
+    const itemRe = /\{[\s\S]*?"id"\s*:\s*"?([^",}\]\s]+)"?[\s\S]*?\}/g;
+    let match;
+    while ((match = itemRe.exec(raw))) {
+      const fragment = match[0];
+      const id = String(match[1] || "").trim();
+      const translatedText = normalizeSubtitleText(
+        extractJsonishStringProperty(fragment, "translatedText") ||
+          extractJsonishStringProperty(fragment, "translation") ||
+          extractJsonishStringProperty(fragment, "text") ||
+          extractJsonishStringProperty(fragment, "zh")
+      );
+      const displaySourceText = formatDisplaySourceText(
+        extractJsonishStringProperty(fragment, "displaySourceText") ||
+          extractJsonishStringProperty(fragment, "punctuatedSourceText") ||
+          extractJsonishStringProperty(fragment, "sourceDisplayText")
+      );
+      if (id && translatedText) {
+        const item = { id, translatedText };
+        if (displaySourceText) {
+          item.displaySourceText = displaySourceText;
+        }
+        items.push(item);
+      }
+    }
+    return items;
+  }
+
   function parseDeepSeekTranslationContent(content) {
-    const parsed = parseLooseJsonContent(content);
+    let parsed;
+    try {
+      parsed = parseLooseJsonContent(content);
+    } catch (error) {
+      const recovered = parseJsonishTranslationItems(content);
+      if (recovered.length) {
+        return recovered;
+      }
+      throw new Error(`Invalid translation JSON: ${error && error.message ? error.message : String(error)}`);
+    }
     const items = [];
 
     if (Array.isArray(parsed)) {

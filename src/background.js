@@ -7,6 +7,7 @@ const CACHE_PREFIX = "ytbt:";
 // In-memory count of cached cue translations so we usually avoid a full storage
 // scan on every write. Reset on service-worker restart; refreshed on demand.
 let cachedItemCount = null;
+const inFlightCueTranslations = new Map();
 
 if (chrome.action && chrome.action.onClicked) {
   chrome.action.onClicked.addListener(() => chrome.runtime.openOptionsPage());
@@ -139,7 +140,8 @@ async function handleTranslateBatch(message) {
     };
   }
 
-  const translatedItems = await translateWithRetry({
+  const translatedItems = await translateMissingCues({
+    cacheKey,
     translationConfig,
     targetLanguage,
     sourceLanguage,
@@ -178,6 +180,68 @@ async function handleTranslateBatch(message) {
     items: cachedItems.concat(translatedItems),
     errors: []
   };
+}
+
+function inFlightCueKey(cacheKey, cueId) {
+  return `${cacheKey}:${cueId}`;
+}
+
+async function translateMissingCues(request) {
+  const pendingCues = [];
+  const sharedPromises = [];
+
+  for (const cue of request.cues) {
+    const key = inFlightCueKey(request.cacheKey, cue.id);
+    const existing = inFlightCueTranslations.get(key);
+    if (existing) {
+      sharedPromises.push(existing);
+    } else {
+      pendingCues.push(cue);
+    }
+  }
+
+  let newItems = [];
+  if (pendingCues.length) {
+    const batchPromise = translateWithRetry(Object.assign({}, request, { cues: pendingCues }));
+    for (const cue of pendingCues) {
+      const key = inFlightCueKey(request.cacheKey, cue.id);
+      const itemPromise = batchPromise.then((items) => {
+        return items.find((entry) => String(entry.id) === String(cue.id)) || null;
+      });
+      inFlightCueTranslations.set(key, itemPromise);
+      itemPromise.finally(() => {
+        if (inFlightCueTranslations.get(key) === itemPromise) {
+          inFlightCueTranslations.delete(key);
+        }
+      }).catch(() => {});
+      sharedPromises.push(itemPromise);
+    }
+    newItems = await batchPromise;
+  }
+
+  const settledSharedItems = sharedPromises.length ? await Promise.allSettled(sharedPromises) : [];
+  const sharedItems = [];
+  let firstSharedError = null;
+  for (const result of settledSharedItems) {
+    if (result.status === "fulfilled") {
+      if (result.value) {
+        sharedItems.push(result.value);
+      }
+    } else if (!firstSharedError) {
+      firstSharedError = result.reason;
+    }
+  }
+
+  const itemsById = new Map();
+  for (const item of newItems.concat(sharedItems)) {
+    if (item && item.id != null && item.translatedText) {
+      itemsById.set(String(item.id), item);
+    }
+  }
+  if (!itemsById.size && firstSharedError) {
+    throw firstSharedError;
+  }
+  return Array.from(itemsById.values());
 }
 
 async function translateWithRetry(request) {
@@ -237,7 +301,7 @@ async function translateBatch({ translationConfig, sourceLanguage, targetLanguag
     ? "Before translating, correct only obvious ASR recognition mistakes in the source using nearby batch context: wrong homophones, broken word boundaries, missing small words, and clear recognition errors. Preserve technical terms, names, code identifiers, acronyms, numbers, and uncertain words exactly when unsure. "
     : "Do not rewrite the source words for ASR correction; only restore natural punctuation and capitalization. ";
   const cueBoundaryInstruction =
-    "Each input id is already a locally merged subtitle cue. Use nearby batch context only to understand meaning, but do not merge text across ids or make multiple ids return the same full sentence. Keep one distinct polished `displaySourceText` and one matching `translatedText` for each input id. ";
+    "Each input id is already a locally merged subtitle cue. Use nearby batch context only to understand meaning, but do not merge text across ids or make multiple ids return the same full sentence. Keep one distinct `translatedText` for each input id. ";
   const terminologyInstruction =
     "For any professional, technical, or specialized terms, you must append the original source term in parentheses immediately after its translation (e.g., '翻译 (Translation)'). ";
   const systemPrompt =
@@ -245,10 +309,10 @@ async function translateBatch({ translationConfig, sourceLanguage, targetLanguag
     sourcePolishInstruction +
     cueBoundaryInstruction +
     terminologyInstruction +
-    "Keep meaning concise for on-screen reading. The displaySourceText field must contain the polished source subtitle, and translatedText must translate that polished meaning. " +
+    "Keep meaning concise for on-screen reading. `translatedText` must translate the polished meaning. " +
     "Return exactly one item for every input id and never skip ids. " +
-    "Output json only in this exact format: " +
-    "{\"items\":[{\"id\":\"0\",\"translatedText\":\"...\",\"displaySourceText\":\"...\"}]}. Do not add commentary.";
+    "Output strict valid JSON only, with no markdown and no extra fields. Escape all quotes and backslashes inside strings. Exact format: " +
+    "{\"items\":[{\"id\":\"0\",\"translatedText\":\"...\"}]}.";
   const userPayload = {
     items: cues.map((cue) => ({ id: String(cue.id), text: cue.sourceText }))
   };
@@ -450,13 +514,23 @@ function delay(ms) {
 // Eviction granularity is per video (each `ytbt:` key), matching the natural
 // "least recently watched video" semantics.
 async function persistTranslationCache({ cacheKey, cacheValue, addedCount, maxItems }) {
+  const latest = await storageGet({ [cacheKey]: { items: {}, updatedAt: 0 } });
+  const latestValue = latest[cacheKey] || { items: {}, updatedAt: 0 };
+  const latestItems = latestValue.items && typeof latestValue.items === "object" ? latestValue.items : {};
+  const incomingItems = cacheValue.items && typeof cacheValue.items === "object" ? cacheValue.items : {};
+  const actualAddedCount = Object.keys(incomingItems).filter((key) => !latestItems[key]).length;
+  cacheValue = Object.assign({}, latestValue, cacheValue, {
+    items: Object.assign({}, latestItems, incomingItems),
+    updatedAt: Date.now()
+  });
+  addedCount = actualAddedCount;
+
   // Lazily initialize the in-memory count once per service-worker lifetime.
   if (cachedItemCount == null) {
     cachedItemCount = await countCachedTranslationItems();
   }
 
-  const previousItemsInKey = Object.keys(cacheValue.items || {}).length - addedCount;
-  cachedItemCount += Math.max(0, addedCount - Math.max(0, previousItemsInKey));
+  cachedItemCount += addedCount;
 
   if (cachedItemCount > maxItems) {
     const evicted = await evictOldestCacheKeys(cachedItemCount - maxItems, cacheKey);

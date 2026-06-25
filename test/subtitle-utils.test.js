@@ -216,6 +216,35 @@ test("mergeCaptionFragments breaks on long gaps", () => {
   assert.equal(merged.length, 2);
 });
 
+test("mergeCaptionFragments keeps dangling phrase endings with the next cue", () => {
+  const raw = [
+    { startMs: 0, endMs: 1000, sourceText: "just remember it's it's following your" },
+    { startMs: 1100, endMs: 1600, sourceText: "nose." }
+  ];
+
+  const merged = Core.mergeCaptionFragments(raw, {
+    maxChars: 32,
+    hardMaxChars: 120
+  });
+
+  assert.equal(merged.length, 1);
+  assert.equal(merged[0].sourceText, "just remember it's it's following your nose.");
+});
+
+test("mergeCaptionFragments still breaks at soft limits for complete phrases", () => {
+  const raw = [
+    { startMs: 0, endMs: 1000, sourceText: "This part is complete enough" },
+    { startMs: 1100, endMs: 1600, sourceText: "Next idea starts here" }
+  ];
+
+  const merged = Core.mergeCaptionFragments(raw, {
+    maxChars: 28,
+    hardMaxChars: 120
+  });
+
+  assert.equal(merged.length, 2);
+});
+
 test("findCueAtTime returns the active cue by binary search", () => {
   const cues = [
     { startMs: 0, endMs: 1000, sourceText: "A" },
@@ -245,6 +274,12 @@ test("parseDeepSeekTranslationContent accepts common JSON shapes", () => {
       '```json\n{"items":[{"id":"4","translatedText":"ok","displaySourceText":"it works"}]}\n```'
     ),
     [{ id: "4", translatedText: "ok", displaySourceText: "It works." }]
+  );
+  assert.deepEqual(
+    Core.parseDeepSeekTranslationContent(
+      '{"items":[{"id":"5","translatedText":"他说 "Hello" 吧"}]}'
+    ),
+    [{ id: "5", translatedText: '他说 "Hello" 吧' }]
   );
 });
 
@@ -369,6 +404,10 @@ test("classifyTranslationError marks transient failures as retryable", () => {
   assert.equal(Core.classifyTranslationError("failed to fetch"), "retryable");
   assert.equal(Core.classifyTranslationError("response truncated (finish_reason=length)"), "retryable");
   assert.equal(Core.classifyTranslationError("returned non-JSON response."), "retryable");
+  assert.equal(
+    Core.classifyTranslationError("Invalid translation JSON: Expected ',' or '}' after property value in JSON at position 793"),
+    "retryable"
+  );
 });
 
 test("classifyTranslationError marks config and auth errors as fatal", () => {
