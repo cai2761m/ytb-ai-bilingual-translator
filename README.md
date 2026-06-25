@@ -10,18 +10,19 @@ No audio recognition is needed; the extension works entirely from YouTube's exis
 
 ## Features
 
-- **Intelligent caption merging** — reassembles YouTube's word/phrase-level caption fragments into complete, readable sentences.
+- **Sentence-aware caption merging** — reassembles YouTube's word/phrase-level caption fragments into complete, readable sentences and avoids obvious broken boundaries such as "following your / nose".
 - **AI-powered translation** — translates subtitles using LLM APIs with context-aware prompts for natural, high-quality results.
 - **Priority-based scheduling** — translates captions near the current playback position first, then continues with the rest of the video in the background.
 - **ASR error correction** — optionally uses AI to fix common auto-generated subtitle mistakes before translation.
 - **Draggable overlay** — the bilingual subtitle overlay can be repositioned via long-press drag, and the position is persisted.
 - **Adjustable font size** — subtitle size can be scaled from 0.7× to 1.8× via the options page.
-- **Translation cache** — caches translated cues in `chrome.storage.local` to avoid redundant API calls, with automatic LRU eviction.
-- **Parallel batch translation** — sends multiple batches concurrently with configurable parallelism and smart back-off on rate limits / server errors.
+- **Stable translation cache** — caches translated cues in `chrome.storage.local` with stable video/track fingerprints, so refreshing the same video reuses existing translations instead of calling the API again.
+- **In-flight request deduplication** — if a page is refreshed while translations are still running, duplicate requests for the same cue reuse the existing background request when possible.
+- **Parallel batch translation** — sends multiple batches concurrently with provider-specific batch sizes, smart back-off, partial-result handling, and retry logic for rate limits, malformed JSON, missing cue results, and server errors.
 - **Multiple translation providers**:
   - **DeepSeek** (default) — works out of the box with an API key.
   - **Gemini** — Google's Gemini API with dedicated batching parameters.
-  - **Custom OpenAI-compatible API** — any provider that implements the OpenAI Chat Completions interface.
+  - **Custom OpenAI-compatible API** — any provider that implements the OpenAI Chat Completions interface, including API relay / model pool services.
 
 ## Install
 
@@ -54,6 +55,27 @@ Open the extension's options page (click the extension icon → settings) to con
 | **Target Language** | Simplified Chinese / Traditional Chinese |
 | **Font Scale** | Subtitle size multiplier (0.7× – 1.8×) |
 | **Subtitle Enabled** | Toggle the overlay on/off and hide native YouTube CC |
+
+### Custom OpenAI-Compatible APIs
+
+For an OpenAI-compatible relay service, select **Custom OpenAI-compatible API** and fill in:
+
+| Field | Example |
+|---|---|
+| **API Key** | `sk-...` |
+| **Base URL** | `https://anpin.ai/v1` |
+| **Model** | `gpt-5.4` |
+
+Keep **JSON Response Mode** enabled first. If a provider does not support OpenAI JSON mode, disable it and the extension will still try to parse and recover usable translation results.
+
+### Cache Behavior
+
+The extension caches translations by video, source track identity, provider, endpoint, model, source language, target language, ASR correction mode, merge version, and cache version. Refreshing the same YouTube video should reuse cached translated cues. A new API request is expected only when:
+
+- the cue has never been translated successfully;
+- the model, provider, Base URL, target language, source language, or ASR correction setting changes;
+- the local translation cache is cleared;
+- the subtitle merge algorithm version changes.
 
 ## Project Structure
 
