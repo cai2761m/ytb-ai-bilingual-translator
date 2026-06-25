@@ -795,8 +795,7 @@
         trackFingerprint: batch.trackFingerprint,
         cues: batch.cues.map((cue) => ({
           id: cue.id,
-          sourceText: cue.sourceText,
-          displaySourceText: cue.displaySourceText
+          sourceText: cue.sourceText
         }))
       });
 
@@ -1026,7 +1025,7 @@
   // attempt fits within the token budget, instead of retrying the same oversized
   // batch and looping. Returns true when the split was applied.
   function splitBatchOnTruncation(batch, message) {
-    if (!/truncated|finish_reason/i.test(String(message || ""))) {
+    if (!/truncated|finish_reason|MAX_TOKENS/i.test(String(message || ""))) {
       return false;
     }
     const eligible = [];

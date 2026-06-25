@@ -20,7 +20,7 @@
 
   const DEEPSEEK_MODEL = "deepseek-v4-flash";
   const GEMINI_MODEL = "gemini-3.5-flash";
-  const MERGE_VERSION = "1";
+  const MERGE_VERSION = "2";
   const DEEPSEEK_BASE_URL = "https://api.deepseek.com";
   const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
 

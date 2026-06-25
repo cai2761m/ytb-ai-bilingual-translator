@@ -188,6 +188,9 @@ async function translateWithRetry(request) {
     } catch (error) {
       lastError = error;
       const message = (error && error.message) || String(error);
+      if (isTruncationError(message)) {
+        throw error;
+      }
       // Fatal / unknown errors (bad config, auth, quota, unparseable shapes)
       // should not waste retry budget; only retry transient failures.
       if (Core.classifyTranslationError(message) !== "retryable") {
@@ -203,6 +206,10 @@ async function translateWithRetry(request) {
     }
   }
   throw lastError;
+}
+
+function isTruncationError(message) {
+  return /truncated|finish_reason=(?:length|MAX_TOKENS)|MAX_TOKENS/i.test(String(message || ""));
 }
 
 function retryDelayForError(message, translationConfig, attempt) {
@@ -229,23 +236,20 @@ async function translateBatch({ translationConfig, sourceLanguage, targetLanguag
   const sourcePolishInstruction = asrCorrectionEnabled
     ? "Before translating, correct only obvious ASR recognition mistakes in the source using nearby batch context: wrong homophones, broken word boundaries, missing small words, and clear recognition errors. Preserve technical terms, names, code identifiers, acronyms, numbers, and uncertain words exactly when unsure. "
     : "Do not rewrite the source words for ASR correction; only restore natural punctuation and capitalization. ";
-  const mergeInstruction =
-    "CRITICAL: Subtitles are often broken into incomplete fragments across multiple ids. You must mentally merge these fragments into structurally complete and readable sentences. For all ids that belong to the same merged sentence, return the exact same complete merged sentence in both `displaySourceText` and `translatedText`. Do not return fragmented text. ";
+  const cueBoundaryInstruction =
+    "Each input id is already a locally merged subtitle cue. Use nearby batch context only to understand meaning, but do not merge text across ids or make multiple ids return the same full sentence. Keep one distinct polished `displaySourceText` and one matching `translatedText` for each input id. ";
   const terminologyInstruction =
     "For any professional, technical, or specialized terms, you must append the original source term in parentheses immediately after its translation (e.g., '翻译 (Translation)'). ";
   const systemPrompt =
     `You are a subtitle translation engine. Translate ${sourceLabel} subtitles into natural ${targetLabel}. ` +
     sourcePolishInstruction +
-    mergeInstruction +
+    cueBoundaryInstruction +
     terminologyInstruction +
     "Keep meaning concise for on-screen reading. The displaySourceText field must contain the polished source subtitle, and translatedText must translate that polished meaning. " +
     "Return exactly one item for every input id and never skip ids. " +
     "Output json only in this exact format: " +
     "{\"items\":[{\"id\":\"0\",\"translatedText\":\"...\",\"displaySourceText\":\"...\"}]}. Do not add commentary.";
   const userPayload = {
-    sourceLanguage,
-    targetLanguage,
-    asrCorrectionEnabled: Boolean(asrCorrectionEnabled),
     items: cues.map((cue) => ({ id: String(cue.id), text: cue.sourceText }))
   };
 
@@ -366,7 +370,7 @@ async function translateBatch({ translationConfig, sourceLanguage, targetLanguag
   // instead of silently dropping cues and entering per-cue retry loops.
   if (finishReason === "length" || finishReason === "MAX_TOKENS") {
     throw new Error(
-      `${translationConfig.providerLabel} response truncated (finish_reason=${finishReason}); will retry in smaller batches.`
+      `${translationConfig.providerLabel} response truncated (finish_reason=${finishReason}); split batch in content.`
     );
   }
 
