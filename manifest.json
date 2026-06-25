@@ -29,6 +29,7 @@
   ],
   "options_page": "options/options.html",
   "action": {
-    "default_title": "ytb-ai-bilingual-translator"
+    "default_title": "ytb-ai-bilingual-translator",
+    "default_popup": "popup/popup.html"
   }
 }

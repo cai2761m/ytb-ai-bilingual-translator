@@ -9,10 +9,6 @@ const CACHE_PREFIX = "ytbt:";
 let cachedItemCount = null;
 const inFlightCueTranslations = new Map();
 
-if (chrome.action && chrome.action.onClicked) {
-  chrome.action.onClicked.addListener(() => chrome.runtime.openOptionsPage());
-}
-
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message || message.type !== "TRANSLATE_BATCH") {
     return false;
