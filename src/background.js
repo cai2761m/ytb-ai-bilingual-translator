@@ -2,7 +2,7 @@ importScripts("shared.js");
 
 const Core = globalThis.YTBTCore;
 const MAX_RETRIES = 2;
-const REQUEST_TIMEOUT_MS = 20000;
+const REQUEST_TIMEOUT_MS = 60000;
 const CACHE_PREFIX = "ytbt:";
 // In-memory count of cached cue translations so we usually avoid a full storage
 // scan on every write. Reset on service-worker restart; refreshed on demand.
@@ -10,23 +10,42 @@ let cachedItemCount = null;
 const inFlightCueTranslations = new Map();
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (!message || message.type !== "TRANSLATE_BATCH") {
+  if (!message) {
     return false;
   }
 
-  handleTranslateBatch(message)
-    .then(sendResponse)
-    .catch((error) => {
-      sendResponse({
-        type: "TRANSLATE_RESULT",
-        ok: false,
-        videoId: message.videoId,
-        items: [],
-        errors: [{ message: error && error.message ? error.message : String(error) }]
+  if (message.type === "TRANSLATE_BATCH") {
+    handleTranslateBatch(message)
+      .then(sendResponse)
+      .catch((error) => {
+        sendResponse({
+          type: "TRANSLATE_RESULT",
+          ok: false,
+          videoId: message.videoId,
+          items: [],
+          errors: [{ message: error && error.message ? error.message : String(error) }]
+        });
       });
-    });
 
-  return true;
+    return true;
+  }
+
+  if (message.type === "IMMERSIVE_TRANSLATE") {
+    handleImmersiveTranslate(message)
+      .then(sendResponse)
+      .catch((error) => {
+        sendResponse({
+          type: "IMMERSIVE_TRANSLATE_RESULT",
+          ok: false,
+          items: [],
+          errors: [{ message: error && error.message ? error.message : String(error) }]
+        });
+      });
+
+    return true;
+  }
+
+  return false;
 });
 
 function storageGet(defaults) {
@@ -178,6 +197,67 @@ async function handleTranslateBatch(message) {
   };
 }
 
+async function handleImmersiveTranslate(message) {
+  const settings = await storageGet(Core.DEFAULT_SETTINGS);
+  const targetLanguage = settings.targetLanguage || Core.DEFAULT_SETTINGS.targetLanguage;
+  const sourceLanguage = settings.sourceLanguage || Core.DEFAULT_SETTINGS.sourceLanguage;
+  const translationConfig = Core.resolveTranslationConfig(settings, "immersive");
+
+  if (!translationConfig.apiKey) {
+    return {
+      type: "IMMERSIVE_TRANSLATE_RESULT",
+      ok: false,
+      items: [],
+      errors: [{ code: "missing_api_key", message: `${translationConfig.providerLabel} API Key is not configured.` }]
+    };
+  }
+
+  const endpointUrl =
+    translationConfig.apiStyle === "gemini"
+      ? translationConfig.generateContentUrl
+      : translationConfig.chatCompletionsUrl;
+  if (!endpointUrl || !translationConfig.model) {
+    return {
+      type: "IMMERSIVE_TRANSLATE_RESULT",
+      ok: false,
+      items: [],
+      errors: [{ code: "missing_provider_config", message: `${translationConfig.providerLabel} base URL or model is not configured.` }]
+    };
+  }
+
+  const cues = (Array.isArray(message.items) ? message.items : [])
+    .map((item) => ({
+      id: item && item.id != null ? String(item.id) : "",
+      sourceText: Core.normalizeSubtitleText(item && item.sourceText)
+    }))
+    .filter((item) => item.id && item.sourceText);
+
+  if (!cues.length) {
+    return {
+      type: "IMMERSIVE_TRANSLATE_RESULT",
+      ok: true,
+      items: [],
+      errors: []
+    };
+  }
+
+  const translatedItems = await translateWithRetry({
+    translationConfig,
+    targetLanguage,
+    sourceLanguage,
+    asrCorrectionEnabled: false,
+    cues,
+    mode: "immersive"
+  });
+
+  return {
+    type: "IMMERSIVE_TRANSLATE_RESULT",
+    ok: true,
+    items: translatedItems,
+    errors: []
+  };
+}
+
 function inFlightCueKey(cacheKey, cueId) {
   return `${cacheKey}:${cueId}`;
 }
@@ -287,12 +367,13 @@ function retryDelayForError(message, translationConfig, attempt) {
   return base * Math.pow(2, attempt);
 }
 
-async function translateBatch({ translationConfig, sourceLanguage, targetLanguage, asrCorrectionEnabled, cues }) {
+async function translateBatch({ translationConfig, sourceLanguage, targetLanguage, asrCorrectionEnabled, cues, mode }) {
   const sourceLabel = Core.sourceLanguageLabel(sourceLanguage);
   const targetLabel = Core.targetLanguageLabel(targetLanguage);
   // Allow roughly 200 output tokens per cue so longer batches are not silently
   // truncated. Bounded to a sane [2048, 8000] range.
-  const maxTokens = Math.min(8000, Math.max(2048, cues.length * 200));
+  const sourceCharCount = cues.reduce((total, cue) => total + String(cue.sourceText || "").length, 0);
+  const maxTokens = Math.min(8000, Math.max(2048, cues.length * 220, Math.ceil(sourceCharCount * 1.25)));
   const sourcePolishInstruction = asrCorrectionEnabled
     ? "Before translating, correct only obvious ASR recognition mistakes in the source using nearby batch context: wrong homophones, broken word boundaries, missing small words, and clear recognition errors. Preserve technical terms, names, code identifiers, acronyms, numbers, and uncertain words exactly when unsure. "
     : "Do not rewrite the source words for ASR correction; only restore natural punctuation and capitalization. ";
@@ -300,15 +381,22 @@ async function translateBatch({ translationConfig, sourceLanguage, targetLanguag
     "Each input id is already a locally merged subtitle cue. Use nearby batch context only to understand meaning, but do not merge text across ids or make multiple ids return the same full sentence. Keep one distinct `translatedText` for each input id. ";
   const terminologyInstruction =
     "For any professional, technical, or specialized terms, you must append the original source term in parentheses immediately after its translation (e.g., '翻译 (Translation)'). ";
-  const systemPrompt =
-    `You are a subtitle translation engine. Translate ${sourceLabel} subtitles into natural ${targetLabel}. ` +
-    sourcePolishInstruction +
-    cueBoundaryInstruction +
-    terminologyInstruction +
-    "Keep meaning concise for on-screen reading. `translatedText` must translate the polished meaning. " +
+  const outputInstruction =
     "Return exactly one item for every input id and never skip ids. " +
     "Output strict valid JSON only, with no markdown and no extra fields. Escape all quotes and backslashes inside strings. Exact format: " +
     "{\"items\":[{\"id\":\"0\",\"translatedText\":\"...\"}]}.";
+  const systemPrompt =
+    mode === "immersive"
+      ? `You are an immersive webpage translation engine. Translate ${sourceLabel} webpage text into natural ${targetLabel}. ` +
+        "Do not summarize, omit, merge, or split items. Preserve URLs, code identifiers, numbers, names, product names, and formatting-sensitive symbols. " +
+        "Keep the translation faithful and readable as a bilingual paragraph shown under the original text. " +
+        outputInstruction
+      : `You are a subtitle translation engine. Translate ${sourceLabel} subtitles into natural ${targetLabel}. ` +
+        sourcePolishInstruction +
+        cueBoundaryInstruction +
+        terminologyInstruction +
+        "Keep meaning concise for on-screen reading. `translatedText` must translate the polished meaning. " +
+        outputInstruction;
   const userPayload = {
     items: cues.map((cue) => ({ id: String(cue.id), text: cue.sourceText }))
   };

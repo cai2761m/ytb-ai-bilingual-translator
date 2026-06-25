@@ -344,6 +344,44 @@ test("resolveTranslationConfig supports custom OpenAI-compatible API", () => {
   assert.equal(config.includeDeepSeekThinkingFlag, false);
 });
 
+test("resolveTranslationConfig lets immersive translation inherit realtime API", () => {
+  const config = Core.resolveTranslationConfig(
+    {
+      translationProvider: "custom",
+      translationApiKey: "realtime-key",
+      translationBaseUrl: "https://api.example.com/v1",
+      translationModel: "realtime-model"
+    },
+    "immersive"
+  );
+
+  assert.equal(config.provider, "custom");
+  assert.equal(config.apiKey, "realtime-key");
+  assert.equal(config.model, "realtime-model");
+  assert.equal(config.chatCompletionsUrl, "https://api.example.com/v1/chat/completions");
+});
+
+test("resolveTranslationConfig supports dedicated immersive API", () => {
+  const config = Core.resolveTranslationConfig(
+    {
+      translationProvider: "custom",
+      translationApiKey: "realtime-key",
+      translationBaseUrl: "https://api.example.com/v1",
+      translationModel: "realtime-model",
+      immersiveTranslationProvider: "gemini",
+      immersiveTranslationApiKey: "immersive-key",
+      immersiveTranslationJsonResponse: false
+    },
+    "immersive"
+  );
+
+  assert.equal(config.provider, "gemini");
+  assert.equal(config.apiKey, "immersive-key");
+  assert.equal(config.baseUrl, Core.GEMINI_BASE_URL);
+  assert.equal(config.model, Core.GEMINI_MODEL);
+  assert.equal(config.useJsonResponseFormat, false);
+});
+
 test("resolveTranslationConfig supports Gemini API", () => {
   const config = Core.resolveTranslationConfig({
     translationProvider: "gemini",

@@ -3,88 +3,25 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>YouTube 双语字幕设置</title>
+    <title>双语翻译</title>
     <link rel="stylesheet" href="popup.css">
   </head>
   <body>
     <main class="popup">
-      <header>
-        <h1>YouTube 双语字幕</h1>
-        <p>配置翻译服务和字幕显示。</p>
+      <header class="popup-header">
+        <div>
+          <h1>双语翻译</h1>
+          <p>配置实时字幕翻译和沉浸式网页翻译。</p>
+        </div>
+        <button id="open-settings" type="button" class="secondary compact">设置</button>
       </header>
 
-      <form id="settings-form" class="panel">
-        <label class="field">
-          <span>翻译服务</span>
-          <select id="translationProvider">
-            <option value="deepseek">DeepSeek</option>
-            <option value="gemini">Gemini</option>
-            <option value="custom">自定义 OpenAI-compatible API</option>
-          </select>
-        </label>
-
-        <label class="field">
-          <span>API Key</span>
-          <input id="translationApiKey" type="password" autocomplete="off" placeholder="sk-...">
-        </label>
-
-        <label class="field">
-          <span>Base URL</span>
-          <input id="translationBaseUrl" type="url" autocomplete="off" placeholder="https://api.deepseek.com">
-        </label>
-
-        <label class="field">
-          <span>模型</span>
-          <input id="translationModel" type="text" autocomplete="off" placeholder="deepseek-v4-flash">
-        </label>
-
-        <label class="toggle">
-          <input id="translationJsonResponse" type="checkbox">
-          <span>请求 JSON 输出模式</span>
-        </label>
-
-        <label class="toggle">
-          <input id="asrCorrectionEnabled" type="checkbox">
-          <span>启用 AI ASR 纠错</span>
-        </label>
-
-        <div class="grid">
-          <label class="field">
-            <span>源语言</span>
-            <select id="sourceLanguage">
-              <option value="en">English</option>
-            </select>
-          </label>
-
-          <label class="field">
-            <span>目标语言</span>
-            <select id="targetLanguage">
-              <option value="zh-CN">简体中文</option>
-              <option value="zh-TW">繁体中文</option>
-            </select>
-          </label>
-        </div>
-
-        <label class="field">
-          <span>字幕大小 <strong id="fontScaleValue">1.0x</strong></span>
-          <input id="fontScale" type="range" min="0.7" max="1.8" step="0.1">
-        </label>
-
-        <label class="toggle">
-          <input id="subtitleEnabled" type="checkbox">
-          <span>启用插件字幕并隐藏 YouTube 原生 CC 字幕</span>
-        </label>
-
-        <div class="actions">
-          <button type="submit">保存设置</button>
-          <button id="clear-cache" type="button" class="secondary">清空缓存</button>
-        </div>
-
-        <p id="status" class="status" role="status"></p>
-      </form>
+      <section class="panel quick-status">
+        <strong>使用方式</strong>
+        <p>YouTube 页面自动显示实时双语字幕；普通网页右侧小圆球点击后生成中英对照翻译。</p>
+      </section>
     </main>
 
-    <script src="../src/shared.js"></script>
-    <script src="../options/options.js"></script>
+    <script src="popup.js"></script>
   </body>
 </html>

@@ -7,6 +7,7 @@
   "host_permissions": [
     "https://www.youtube.com/*",
     "https://*/*",
+    "http://*/*",
     "http://localhost/*",
     "http://127.0.0.1/*"
   ],
@@ -19,6 +20,12 @@
       "js": ["src/shared.js", "src/content.js"],
       "css": ["src/overlay.css"],
       "run_at": "document_start"
+    },
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["src/shared.js", "src/immersive.js"],
+      "css": ["src/immersive.css"],
+      "run_at": "document_idle"
     }
   ],
   "web_accessible_resources": [

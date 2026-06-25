@@ -1,0 +1,162 @@
+.ytbt-immersive-ball {
+  position: fixed;
+  top: 50%;
+  right: 18px;
+  z-index: 2147483645;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border: 1px solid rgba(255, 255, 255, 0.68);
+  border-radius: 999px;
+  background: linear-gradient(145deg, #fb9bb7, #f472b6);
+  color: #fff;
+  box-shadow:
+    0 8px 18px rgba(190, 24, 93, 0.22),
+    inset 0 1px 0 rgba(255, 255, 255, 0.34);
+  cursor: grab;
+  font-family: Arial, "Microsoft YaHei", sans-serif;
+  font-size: 15px;
+  font-weight: 800;
+  line-height: 1;
+  transform: translateY(-50%);
+  touch-action: none;
+  user-select: none;
+  transition:
+    top 120ms ease,
+    transform 160ms ease,
+    box-shadow 160ms ease,
+    opacity 160ms ease;
+}
+
+.ytbt-immersive-ball:hover {
+  box-shadow:
+    0 10px 22px rgba(190, 24, 93, 0.26),
+    inset 0 1px 0 rgba(255, 255, 255, 0.38);
+  transform: translateY(-50%) scale(1.05);
+}
+
+.ytbt-immersive-ball:active {
+  transform: translateY(-50%) scale(0.98);
+}
+
+.ytbt-immersive-ball[data-ytbt-state="translating"] {
+  animation: ytbt-immersive-pulse 1.2s ease-in-out infinite;
+}
+
+.ytbt-immersive-ball.ytbt-immersive-dragging {
+  cursor: grabbing;
+  transition: box-shadow 120ms ease, opacity 120ms ease;
+}
+
+.ytbt-immersive-ball[data-ytbt-state="done"] {
+  background: linear-gradient(145deg, #047857, #16a34a);
+}
+
+.ytbt-immersive-ball[data-ytbt-state="error"] {
+  background: linear-gradient(145deg, #b91c1c, #ef4444);
+}
+
+.ytbt-immersive-panel {
+  position: fixed;
+  top: calc(50% + 34px);
+  right: 18px;
+  z-index: 2147483645;
+  box-sizing: border-box;
+  max-width: min(320px, calc(100vw - 36px));
+  padding: 9px 11px;
+  border: 1px solid rgba(15, 23, 42, 0.12);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.96);
+  color: #111827;
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.2);
+  font-family: Arial, "Microsoft YaHei", sans-serif;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.ytbt-immersive-panel[hidden] {
+  display: none !important;
+}
+
+.ytbt-immersive-source {
+  outline-offset: 2px;
+}
+
+.ytbt-immersive-translation {
+  box-sizing: border-box;
+  display: block;
+  width: 100%;
+  margin: 0.35em 0 0.65em;
+  padding: 0.55em 0.72em;
+  border-left: 3px solid #0f766e;
+  border-radius: 6px;
+  background: rgba(240, 253, 250, 0.9);
+  color: #134e4a;
+  font-family: Arial, "Microsoft YaHei", sans-serif;
+  font-size: 0.96em;
+  line-height: 1.65;
+  text-align: left;
+}
+
+li > .ytbt-immersive-translation {
+  margin-top: 0.45em;
+}
+
+.ytbt-immersive-label {
+  display: inline-block;
+  margin: 0 0.5em 0 0;
+  padding: 0.1em 0.42em;
+  border-radius: 999px;
+  background: #0f766e;
+  color: #fff;
+  font-size: 0.78em;
+  font-weight: 800;
+  line-height: 1.5;
+  vertical-align: 0.08em;
+}
+
+.ytbt-immersive-text {
+  font-weight: 500;
+}
+
+.ytbt-immersive-translation[data-ytbt-state="loading"] {
+  color: #475569;
+  background: rgba(248, 250, 252, 0.94);
+  border-left-color: #94a3b8;
+}
+
+.ytbt-immersive-translation[data-ytbt-state="error"] {
+  color: #991b1b;
+  background: rgba(254, 242, 242, 0.94);
+  border-left-color: #dc2626;
+}
+
+html.ytbt-immersive-hidden .ytbt-immersive-translation {
+  display: none !important;
+}
+
+@keyframes ytbt-immersive-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.72;
+  }
+}
+
+@media (max-width: 640px) {
+  .ytbt-immersive-ball {
+    right: 12px;
+    width: 30px;
+    height: 30px;
+    font-size: 14px;
+  }
+
+  .ytbt-immersive-panel {
+    right: 12px;
+    max-width: min(280px, calc(100vw - 24px));
+  }
+}

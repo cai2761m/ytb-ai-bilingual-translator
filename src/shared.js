@@ -8,6 +8,11 @@
     translationBaseUrl: "",
     translationModel: "",
     translationJsonResponse: true,
+    immersiveTranslationProvider: "",
+    immersiveTranslationApiKey: "",
+    immersiveTranslationBaseUrl: "",
+    immersiveTranslationModel: "",
+    immersiveTranslationJsonResponse: true,
     targetLanguage: "zh-CN",
     sourceLanguage: "en",
     fontScale: 1,
@@ -870,15 +875,28 @@
     return `${trimmedBaseUrl}/${encodedModelPath}:generateContent`;
   }
 
-  function resolveTranslationConfig(settings) {
+  function resolveTranslationConfig(settings, profile) {
     const source = Object.assign({}, DEFAULT_SETTINGS, settings || {});
+    const useImmersiveConfig =
+      profile === "immersive" && Boolean(String(source.immersiveTranslationProvider || "").trim());
+    const providerValue = useImmersiveConfig
+      ? source.immersiveTranslationProvider
+      : source.translationProvider;
     const provider =
-      source.translationProvider === "custom" || source.translationProvider === "gemini"
-        ? source.translationProvider
+      providerValue === "custom" || providerValue === "gemini"
+        ? providerValue
         : "deepseek";
-    const apiKey = String(source.translationApiKey || source.deepseekApiKey || "").trim();
-    const rawBaseUrl = String(source.translationBaseUrl || "").trim();
-    const rawModel = String(source.translationModel || "").trim();
+    const apiKey = String(
+      useImmersiveConfig
+        ? source.immersiveTranslationApiKey
+        : source.translationApiKey || source.deepseekApiKey || ""
+    ).trim();
+    const rawBaseUrl = String(
+      useImmersiveConfig ? source.immersiveTranslationBaseUrl : source.translationBaseUrl
+    ).trim();
+    const rawModel = String(
+      useImmersiveConfig ? source.immersiveTranslationModel : source.translationModel
+    ).trim();
     let baseUrl =
       rawBaseUrl ||
       (provider === "deepseek" ? DEEPSEEK_BASE_URL : provider === "gemini" ? GEMINI_BASE_URL : "");
@@ -913,7 +931,9 @@
       chatCompletionsUrl: apiStyle === "chat-completions" ? buildChatCompletionsUrl(baseUrl) : "",
       generateContentUrl: apiStyle === "gemini" ? buildGeminiGenerateContentUrl(baseUrl, model) : "",
       model,
-      useJsonResponseFormat: source.translationJsonResponse !== false,
+      useJsonResponseFormat: useImmersiveConfig
+        ? source.immersiveTranslationJsonResponse !== false
+        : source.translationJsonResponse !== false,
       includeDeepSeekThinkingFlag: provider === "deepseek"
     };
   }

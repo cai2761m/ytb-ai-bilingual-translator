@@ -3,11 +3,9 @@
 
   const Core = globalThis.YTBTCore;
   const form = document.querySelector("#settings-form");
-  const translationProvider = document.querySelector("#translationProvider");
-  const apiKeyInput = document.querySelector("#translationApiKey");
-  const translationBaseUrl = document.querySelector("#translationBaseUrl");
-  const translationModel = document.querySelector("#translationModel");
-  const translationJsonResponse = document.querySelector("#translationJsonResponse");
+  const settingsToggle = document.querySelector("#settings-toggle");
+  const realtimeApi = createApiFields("");
+  const immersiveApi = createApiFields("immersive");
   const asrCorrectionEnabled = document.querySelector("#asrCorrectionEnabled");
   const sourceLanguage = document.querySelector("#sourceLanguage");
   const targetLanguage = document.querySelector("#targetLanguage");
@@ -20,25 +18,91 @@
   init();
 
   async function init() {
-    const settings = await storageGet(Core.DEFAULT_SETTINGS);
-    const config = Core.resolveTranslationConfig(settings);
-    translationProvider.value = config.provider;
-    apiKeyInput.value = settings.translationApiKey || settings.deepseekApiKey || "";
-    translationBaseUrl.value = settings.translationBaseUrl || config.baseUrl || "";
-    translationModel.value = settings.translationModel || config.model || "";
-    translationJsonResponse.checked = settings.translationJsonResponse !== false;
-    asrCorrectionEnabled.checked = settings.asrCorrectionEnabled !== false;
-    sourceLanguage.value = settings.sourceLanguage || Core.DEFAULT_SETTINGS.sourceLanguage;
-    targetLanguage.value = settings.targetLanguage || Core.DEFAULT_SETTINGS.targetLanguage;
-    fontScale.value = settings.fontScale || Core.DEFAULT_SETTINGS.fontScale;
-    subtitleEnabled.checked = settings.subtitleEnabled !== false;
-    updateFontScaleLabel();
-    updateProviderPlaceholders();
+    if (!form) {
+      return;
+    }
 
-    translationProvider.addEventListener("change", handleProviderChange);
-    fontScale.addEventListener("input", updateFontScaleLabel);
+    const settings = await storageGet(Core.DEFAULT_SETTINGS);
+    hydrateApiFields(realtimeApi, settings, "realtime");
+    hydrateApiFields(immersiveApi, settings, "immersive");
+
+    if (asrCorrectionEnabled) {
+      asrCorrectionEnabled.checked = settings.asrCorrectionEnabled !== false;
+    }
+    if (sourceLanguage) {
+      sourceLanguage.value = settings.sourceLanguage || Core.DEFAULT_SETTINGS.sourceLanguage;
+    }
+    if (targetLanguage) {
+      targetLanguage.value = settings.targetLanguage || Core.DEFAULT_SETTINGS.targetLanguage;
+    }
+    if (fontScale) {
+      fontScale.value = settings.fontScale || Core.DEFAULT_SETTINGS.fontScale;
+    }
+    if (subtitleEnabled) {
+      subtitleEnabled.checked = settings.subtitleEnabled !== false;
+    }
+
+    updateFontScaleLabel();
+    bindApiFieldEvents(realtimeApi);
+    bindApiFieldEvents(immersiveApi);
+
+    if (settingsToggle) {
+      settingsToggle.addEventListener("click", toggleSettingsPanel);
+    }
+    if (fontScale) {
+      fontScale.addEventListener("input", updateFontScaleLabel);
+    }
     form.addEventListener("submit", saveSettings);
-    clearCache.addEventListener("click", clearTranslationCache);
+    if (clearCache) {
+      clearCache.addEventListener("click", clearTranslationCache);
+    }
+  }
+
+  function createApiFields(prefix) {
+    const idPrefix = prefix ? `${prefix}Translation` : "translation";
+    return {
+      profile: prefix || "realtime",
+      provider: document.querySelector(`#${idPrefix}Provider`),
+      apiKey: document.querySelector(`#${idPrefix}ApiKey`),
+      baseUrl: document.querySelector(`#${idPrefix}BaseUrl`),
+      model: document.querySelector(`#${idPrefix}Model`),
+      jsonResponse: document.querySelector(`#${idPrefix}JsonResponse`)
+    };
+  }
+
+  function hydrateApiFields(fields, settings, profile) {
+    if (!fields.provider) {
+      return;
+    }
+
+    const isImmersive = profile === "immersive";
+    const config = Core.resolveTranslationConfig(settings, isImmersive ? "immersive" : undefined);
+
+    fields.provider.value = isImmersive
+      ? settings.immersiveTranslationProvider || ""
+      : config.provider;
+    fields.apiKey.value = isImmersive
+      ? settings.immersiveTranslationApiKey || ""
+      : settings.translationApiKey || settings.deepseekApiKey || "";
+    fields.baseUrl.value = isImmersive
+      ? settings.immersiveTranslationBaseUrl || ""
+      : settings.translationBaseUrl || config.baseUrl || "";
+    fields.model.value = isImmersive
+      ? settings.immersiveTranslationModel || ""
+      : settings.translationModel || config.model || "";
+    fields.jsonResponse.checked = isImmersive
+      ? settings.immersiveTranslationJsonResponse !== false
+      : settings.translationJsonResponse !== false;
+
+    updateProviderPlaceholders(fields);
+  }
+
+  function bindApiFieldEvents(fields) {
+    if (!fields.provider) {
+      return;
+    }
+
+    fields.provider.addEventListener("change", () => handleProviderChange(fields));
   }
 
   function storageGet(defaults) {
@@ -55,22 +119,57 @@
 
   async function saveSettings(event) {
     event.preventDefault();
-    const apiKey = apiKeyInput.value.trim();
-    const provider = translationProvider.value;
+    const realtime = readApiFields(realtimeApi);
+    const immersive = readApiFields(immersiveApi);
+    const useDedicatedImmersiveApi = Boolean(immersive.provider);
+
     await storageSet({
-      translationProvider: provider,
-      translationApiKey: apiKey,
-      translationBaseUrl: translationBaseUrl.value.trim(),
-      translationModel: translationModel.value.trim(),
-      translationJsonResponse: translationJsonResponse.checked,
-      asrCorrectionEnabled: asrCorrectionEnabled.checked,
-      deepseekApiKey: provider === "deepseek" ? apiKey : "",
-      sourceLanguage: sourceLanguage.value,
-      targetLanguage: targetLanguage.value,
-      fontScale: Number(fontScale.value),
-      subtitleEnabled: subtitleEnabled.checked
+      translationProvider: realtime.provider || "deepseek",
+      translationApiKey: realtime.apiKey,
+      translationBaseUrl: realtime.baseUrl,
+      translationModel: realtime.model,
+      translationJsonResponse: realtime.jsonResponse,
+      deepseekApiKey: realtime.provider === "deepseek" ? realtime.apiKey : "",
+      immersiveTranslationProvider: immersive.provider,
+      immersiveTranslationApiKey: useDedicatedImmersiveApi ? immersive.apiKey : "",
+      immersiveTranslationBaseUrl: useDedicatedImmersiveApi ? immersive.baseUrl : "",
+      immersiveTranslationModel: useDedicatedImmersiveApi ? immersive.model : "",
+      immersiveTranslationJsonResponse: useDedicatedImmersiveApi ? immersive.jsonResponse : true,
+      asrCorrectionEnabled: readChecked(asrCorrectionEnabled, true),
+      sourceLanguage: readValue(sourceLanguage, Core.DEFAULT_SETTINGS.sourceLanguage),
+      targetLanguage: readValue(targetLanguage, Core.DEFAULT_SETTINGS.targetLanguage),
+      fontScale: Number(readValue(fontScale, Core.DEFAULT_SETTINGS.fontScale)),
+      subtitleEnabled: readChecked(subtitleEnabled, true)
     });
     showStatus("设置已保存。");
+  }
+
+  function readApiFields(fields) {
+    if (!fields.provider) {
+      return {
+        provider: "deepseek",
+        apiKey: "",
+        baseUrl: "",
+        model: "",
+        jsonResponse: true
+      };
+    }
+
+    return {
+      provider: fields.provider.value,
+      apiKey: fields.apiKey.value.trim(),
+      baseUrl: fields.baseUrl.value.trim(),
+      model: fields.model.value.trim(),
+      jsonResponse: fields.jsonResponse.checked
+    };
+  }
+
+  function readValue(element, fallback) {
+    return element ? element.value : fallback;
+  }
+
+  function readChecked(element, fallback) {
+    return element ? element.checked : fallback;
   }
 
   async function clearTranslationCache() {
@@ -80,44 +179,67 @@
       await storageRemove(cacheKeys);
     }
     await storageSet({ cacheVersion: String(Date.now()) });
-    showStatus(`已清空 ${cacheKeys.length} 条缓存。`);
+    showStatus(`已清空 ${cacheKeys.length} 组翻译缓存。`);
   }
 
   function updateFontScaleLabel() {
-    fontScaleValue.textContent = `${Number(fontScale.value || 1).toFixed(1)}x`;
-  }
-
-  function handleProviderChange() {
-    if (translationProvider.value === "deepseek") {
-      translationBaseUrl.value = Core.DEEPSEEK_BASE_URL;
-      translationModel.value = Core.DEEPSEEK_MODEL;
-    } else if (translationProvider.value === "gemini") {
-      translationBaseUrl.value = Core.GEMINI_BASE_URL;
-      translationModel.value = Core.GEMINI_MODEL;
-    } else if (translationBaseUrl.value.trim() === Core.DEEPSEEK_BASE_URL) {
-      translationBaseUrl.value = "";
-      translationModel.value = "";
-    } else if (translationBaseUrl.value.trim() === Core.GEMINI_BASE_URL) {
-      translationBaseUrl.value = "";
-      translationModel.value = "";
+    if (fontScaleValue && fontScale) {
+      fontScaleValue.textContent = `${Number(fontScale.value || 1).toFixed(1)}x`;
     }
-    updateProviderPlaceholders();
   }
 
-  function updateProviderPlaceholders() {
-    if (translationProvider.value === "deepseek") {
-      translationBaseUrl.placeholder = Core.DEEPSEEK_BASE_URL;
-      translationModel.placeholder = Core.DEEPSEEK_MODEL;
-    } else if (translationProvider.value === "gemini") {
-      translationBaseUrl.placeholder = Core.GEMINI_BASE_URL;
-      translationModel.placeholder = Core.GEMINI_MODEL;
+  function toggleSettingsPanel() {
+    form.hidden = !form.hidden;
+    settingsToggle.setAttribute("aria-expanded", String(!form.hidden));
+    settingsToggle.textContent = form.hidden ? "设置" : "收起设置";
+  }
+
+  function handleProviderChange(fields) {
+    if (fields.provider.value === "") {
+      fields.apiKey.value = "";
+      fields.baseUrl.value = "";
+      fields.model.value = "";
+    } else if (fields.provider.value === "deepseek") {
+      fields.baseUrl.value = Core.DEEPSEEK_BASE_URL;
+      fields.model.value = Core.DEEPSEEK_MODEL;
+    } else if (fields.provider.value === "gemini") {
+      fields.baseUrl.value = Core.GEMINI_BASE_URL;
+      fields.model.value = Core.GEMINI_MODEL;
+    } else if (fields.baseUrl.value.trim() === Core.DEEPSEEK_BASE_URL) {
+      fields.baseUrl.value = "";
+      fields.model.value = "";
+    } else if (fields.baseUrl.value.trim() === Core.GEMINI_BASE_URL) {
+      fields.baseUrl.value = "";
+      fields.model.value = "";
+    }
+    updateProviderPlaceholders(fields);
+  }
+
+  function updateProviderPlaceholders(fields) {
+    if (fields.provider.value === "") {
+      fields.apiKey.placeholder = "沿用实时字幕 API Key";
+      fields.baseUrl.placeholder = "沿用实时字幕 Base URL";
+      fields.model.placeholder = "沿用实时字幕模型";
+    } else if (fields.provider.value === "deepseek") {
+      fields.apiKey.placeholder = "sk-...";
+      fields.baseUrl.placeholder = Core.DEEPSEEK_BASE_URL;
+      fields.model.placeholder = Core.DEEPSEEK_MODEL;
+    } else if (fields.provider.value === "gemini") {
+      fields.apiKey.placeholder = "AIza...";
+      fields.baseUrl.placeholder = Core.GEMINI_BASE_URL;
+      fields.model.placeholder = Core.GEMINI_MODEL;
     } else {
-      translationBaseUrl.placeholder = "https://api.example.com/v1";
-      translationModel.placeholder = "model-name";
+      fields.apiKey.placeholder = "sk-...";
+      fields.baseUrl.placeholder = "https://api.example.com/v1";
+      fields.model.placeholder = "model-name";
     }
   }
 
   function showStatus(message) {
+    if (!status) {
+      return;
+    }
+
     status.textContent = message;
     setTimeout(() => {
       if (status.textContent === message) {

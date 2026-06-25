@@ -20,14 +20,15 @@ body {
 .popup {
   box-sizing: border-box;
   width: 420px;
-  max-height: 600px;
-  overflow-y: auto;
-  overflow-x: hidden;
   padding: 16px;
   background: #f8fafc;
 }
 
-header {
+.popup-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
   margin-bottom: 12px;
 }
 
@@ -50,55 +51,13 @@ p {
   padding: 14px;
 }
 
-.field {
-  display: grid;
-  gap: 6px;
-  margin-bottom: 12px;
-  font-weight: 700;
+.panel + .panel {
+  margin-top: 12px;
 }
 
-.field input,
-.field select {
-  box-sizing: border-box;
-  width: 100%;
-  min-width: 0;
-  border: 1px solid #cbd5e1;
-  border-radius: 6px;
-  padding: 8px 10px;
-  font: inherit;
-  font-weight: 400;
-}
-
-.field input[type="range"] {
-  padding: 0;
-}
-
-.grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 12px;
-}
-
-.toggle {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  margin: 2px 0 12px;
-  font-weight: 700;
-  line-height: 1.45;
-}
-
-.toggle input {
-  flex: 0 0 auto;
-  width: 16px;
-  height: 16px;
-  margin-top: 2px;
-}
-
-.actions {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
+.quick-status strong {
+  display: block;
+  margin-bottom: 4px;
 }
 
 button {
@@ -112,15 +71,13 @@ button {
   cursor: pointer;
 }
 
+button.compact {
+  flex: 0 0 auto;
+  padding: 7px 10px;
+}
+
 button.secondary {
   border: 1px solid #cbd5e1;
   background: #fff;
   color: #1f2937;
-}
-
-.status {
-  min-height: 22px;
-  margin-top: 10px;
-  font-weight: 700;
-  color: #047857;
 }
