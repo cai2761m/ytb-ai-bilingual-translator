@@ -20,7 +20,7 @@
 
   const DEEPSEEK_MODEL = "deepseek-v4-flash";
   const GEMINI_MODEL = "gemini-3.5-flash";
-  const MERGE_VERSION = "3";
+  const MERGE_VERSION = "4";
   const DEEPSEEK_BASE_URL = "https://api.deepseek.com";
   const GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
 
@@ -127,6 +127,7 @@
   const DISPLAY_PRONOUN_WORDS = new Set(["i", "we", "you", "he", "she", "they", "it", "this", "that", "there"]);
   const DANGLING_END_WORDS = new Set([
     ...DISPLAY_PREPOSITION_WORDS,
+    ...DISPLAY_PRONOUN_WORDS,
     "a",
     "an",
     "and",
@@ -205,6 +206,35 @@
     "while",
     "who",
     "whose"
+  ]);
+  const TECHNICAL_MODIFIER_WORDS = new Set([
+    "array",
+    "average",
+    "binary",
+    "black",
+    "breadth",
+    "depth",
+    "double",
+    "doubly",
+    "first",
+    "hash",
+    "linked",
+    "priority",
+    "red",
+    "singly",
+    "worst"
+  ]);
+  const TECHNICAL_HEAD_WORDS = new Set([
+    "graph",
+    "heap",
+    "list",
+    "map",
+    "node",
+    "queue",
+    "search",
+    "stack",
+    "table",
+    "tree"
   ]);
   const TAG_RE = /<[^>]+>/g;
 
@@ -648,24 +678,59 @@
     return words.length ? cleanDisplayWord(words[0]) : "";
   }
 
+  function isLikelyCompoundContinuation(lastWord, firstWord) {
+    if (!lastWord || !firstWord) {
+      return false;
+    }
+
+    if (TECHNICAL_MODIFIER_WORDS.has(lastWord) && TECHNICAL_HEAD_WORDS.has(firstWord)) {
+      return true;
+    }
+
+    if ((lastWord === "doubly" || lastWord === "singly") && firstWord === "linked") {
+      return true;
+    }
+
+    return /ly$/.test(lastWord) && firstWord === "linked";
+  }
+
+  function joinSubtitleFragments(left, right, elideBoundaryPunctuation) {
+    let leftText = String(left || "").trim();
+    let rightText = String(right || "").trim();
+    if (elideBoundaryPunctuation) {
+      leftText = leftText.replace(/[.!?]+(["')\]]*)$/, "$1").trim();
+      rightText = rightText.replace(/^([A-Z])(?=[a-z])/, (match) => match.toLowerCase());
+    }
+    return `${leftText} ${rightText}`.replace(/\s+/g, " ").trim();
+  }
+
   function shouldKeepJoiningFragments(groupText, nextText) {
-    if (!groupText || SENTENCE_END_RE.test(groupText)) {
+    if (!groupText) {
       return false;
     }
 
     const lastWord = lastSubtitleWord(groupText);
     const firstWord = firstSubtitleWord(nextText);
-    return DANGLING_END_WORDS.has(lastWord) || CONTINUATION_START_WORDS.has(firstWord);
+    const compoundContinuation = isLikelyCompoundContinuation(lastWord, firstWord);
+    if (SENTENCE_END_RE.test(groupText)) {
+      return compoundContinuation;
+    }
+
+    return (
+      compoundContinuation ||
+      DANGLING_END_WORDS.has(lastWord) ||
+      CONTINUATION_START_WORDS.has(firstWord)
+    );
   }
 
   function mergeCaptionFragments(cues, options) {
     const settings = Object.assign(
       {
         maxGapMs: 800,
-        maxDurationMs: 10000,
-        maxChars: 180,
-        hardMaxDurationMs: 16000,
-        hardMaxChars: 260
+        maxDurationMs: 12000,
+        maxChars: 220,
+        hardMaxDurationMs: 24000,
+        hardMaxChars: 420
       },
       options || {}
     );
@@ -699,28 +764,31 @@
         groupStart = index;
         groupEnd = index;
         groupText = cue.sourceText;
-        if (SENTENCE_END_RE.test(groupText)) {
-          flush();
-        }
         continue;
       }
 
       const previous = normalized[groupEnd];
       const gapMs = cue.startMs - previous.endMs;
-      const combinedText = `${groupText} ${cue.sourceText}`.replace(/\s+/g, " ").trim();
+      const plainCombinedText = joinSubtitleFragments(groupText, cue.sourceText, false);
       const combinedDuration = cue.endMs - normalized[groupStart].startMs;
       const exceedsSoftLimit =
         combinedDuration > settings.maxDurationMs ||
-        combinedText.length > settings.maxChars;
+        plainCombinedText.length > settings.maxChars;
       const exceedsHardLimit =
         combinedDuration > settings.hardMaxDurationMs ||
-        combinedText.length > settings.hardMaxChars;
+        plainCombinedText.length > settings.hardMaxChars;
       const shouldKeepJoining =
         exceedsSoftLimit && !exceedsHardLimit && shouldKeepJoiningFragments(groupText, cue.sourceText);
+      const sentenceEndBefore = SENTENCE_END_RE.test(groupText);
+      const shouldJoinAfterSentenceEnd =
+        sentenceEndBefore &&
+        !exceedsHardLimit &&
+        gapMs <= settings.maxGapMs &&
+        shouldKeepJoiningFragments(groupText, cue.sourceText);
       const shouldBreakBefore =
         gapMs > settings.maxGapMs ||
         (exceedsSoftLimit && !shouldKeepJoining) ||
-        SENTENCE_END_RE.test(groupText);
+        (sentenceEndBefore && !shouldJoinAfterSentenceEnd);
 
       if (shouldBreakBefore) {
         flush();
@@ -729,12 +797,9 @@
         groupText = cue.sourceText;
       } else {
         groupEnd = index;
-        groupText = combinedText;
+        groupText = joinSubtitleFragments(groupText, cue.sourceText, shouldJoinAfterSentenceEnd);
       }
 
-      if (SENTENCE_END_RE.test(groupText)) {
-        flush();
-      }
     }
 
     flush();

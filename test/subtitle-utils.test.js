@@ -231,6 +231,28 @@ test("mergeCaptionFragments keeps dangling phrase endings with the next cue", ()
   assert.equal(merged[0].sourceText, "just remember it's it's following your nose.");
 });
 
+test("mergeCaptionFragments keeps technical compound terms together", () => {
+  const raw = [
+    {
+      startMs: 0,
+      endMs: 2000,
+      sourceText: "are there any things that we like better about the doubly."
+    },
+    { startMs: 2100, endMs: 2600, sourceText: "Linked list?" }
+  ];
+
+  const merged = Core.mergeCaptionFragments(raw, {
+    maxChars: 60,
+    hardMaxChars: 160
+  });
+
+  assert.equal(merged.length, 1);
+  assert.equal(
+    merged[0].sourceText,
+    "are there any things that we like better about the doubly linked list?"
+  );
+});
+
 test("mergeCaptionFragments still breaks at soft limits for complete phrases", () => {
   const raw = [
     { startMs: 0, endMs: 1000, sourceText: "This part is complete enough" },
