@@ -110,17 +110,21 @@
       return;
     }
 
+    const ballContainer = document.createElement("div");
+    ballContainer.className = "ytbt-immersive-tab";
+    ballContainer.dataset.ytbtImmersiveRoot = "true";
+
     const ball = document.createElement("button");
     ball.type = "button";
     ball.className = "ytbt-immersive-ball";
-    ball.dataset.ytbtImmersiveRoot = "true";
     ball.setAttribute("aria-label", "Immersive translate");
     ball.title = "Immersive translate";
 
-    const ballText = document.createElement("span");
-    ballText.className = "ytbt-immersive-ball-text";
-    ballText.textContent = "\u8bd1";
-    ball.appendChild(ballText);
+    ball.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
+      <path d="M12.87 15.07l-2.54-2.51.03-.03c1.74-1.94 2.98-4.17 3.71-6.53H17V4h-7V2H8v2H1v2h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11.76-2.04zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2l-4.5-12zm-2.62 7l1.62-4.33L19.12 17h-3.24z"/>
+    </svg>`;
+    
+    ballContainer.appendChild(ball);
 
     const panel = document.createElement("div");
     panel.className = "ytbt-immersive-panel";
@@ -128,13 +132,13 @@
     panel.hidden = true;
     panel.setAttribute("role", "status");
 
-    ball.addEventListener("pointerdown", handleBallPointerDown, true);
-    ball.addEventListener("click", handleBallClick);
-    document.body.appendChild(ball);
+    ballContainer.addEventListener("pointerdown", handleBallPointerDown, true);
+    ballContainer.addEventListener("click", handleBallClick);
+    document.body.appendChild(ballContainer);
     document.body.appendChild(panel);
 
-    state.ball = ball;
-    state.ballText = ballText;
+    state.ball = ballContainer;
+    state.ballText = null;
     state.panel = panel;
     loadBallPosition();
     updateBallMode("idle");
@@ -158,6 +162,7 @@
       state.visible = !state.visible;
       document.documentElement.classList.toggle("ytbt-immersive-hidden", !state.visible);
       showStatus(state.visible ? "Bilingual translations shown." : "Bilingual translations hidden.");
+      updateBallMode(state.visible ? "done" : "idle");
       return;
     }
 
@@ -174,9 +179,10 @@
 
     const rect = state.ball.getBoundingClientRect();
     state.ballDrag.pointerId = event.pointerId;
+    state.ballDrag.startClientX = event.clientX;
     state.ballDrag.startClientY = event.clientY;
-    state.ballDrag.lastClientY = event.clientY;
     state.ballDrag.offsetY = event.clientY - rect.top;
+    state.ballDrag.startRight = parseFloat(window.getComputedStyle(state.ball).right) || 0;
     state.ballDrag.active = false;
 
     state.ball.setPointerCapture(event.pointerId);
@@ -191,9 +197,9 @@
       return;
     }
 
-    drag.lastClientY = event.clientY;
-    const distance = Math.abs(event.clientY - drag.startClientY);
-    if (!drag.active && distance >= BALL_DRAG_THRESHOLD_PX) {
+    const distanceX = Math.abs(event.clientX - drag.startClientX);
+    const distanceY = Math.abs(event.clientY - drag.startClientY);
+    if (!drag.active && (distanceX >= BALL_DRAG_THRESHOLD_PX || distanceY >= BALL_DRAG_THRESHOLD_PX)) {
       drag.active = true;
       state.ball.classList.add("ytbt-immersive-dragging");
     }
@@ -204,7 +210,7 @@
 
     event.preventDefault();
     event.stopPropagation();
-    moveBallToClientY(event.clientY);
+    moveBallToClient(event.clientX, event.clientY);
   }
 
   function handleBallPointerUp(event) {
@@ -217,6 +223,7 @@
       event.preventDefault();
       event.stopPropagation();
       drag.suppressClick = true;
+      state.ball.style.right = "0px";
       saveBallPosition();
     }
     cancelBallDrag();
@@ -225,6 +232,9 @@
   function handleBallPointerCancel(event) {
     if (event && state.ballDrag.pointerId !== event.pointerId) {
       return;
+    }
+    if (state.ballDrag.active && state.ball) {
+      state.ball.style.right = "0px";
     }
     cancelBallDrag();
   }
@@ -247,7 +257,7 @@
     state.ballDrag.active = false;
   }
 
-  function moveBallToClientY(clientY) {
+  function moveBallToClient(clientX, clientY) {
     if (!state.ball) {
       return;
     }
@@ -260,6 +270,11 @@
     const centerY = clamp(rawCenterY, Math.min(minCenterY, maxCenterY), Math.max(minCenterY, maxCenterY));
 
     state.ballTopPct = (centerY / Math.max(1, window.innerHeight)) * 100;
+    
+    let newRight = state.ballDrag.startRight - (clientX - state.ballDrag.startClientX);
+    newRight = clamp(newRight, 0, window.innerWidth - rect.width);
+    state.ball.style.right = `${newRight}px`;
+    
     applyBallPosition();
   }
 
@@ -450,28 +465,18 @@
       previous.remove();
     }
 
-    const container = document.createElement("div");
+    const container = document.createElement("span");
     container.className = "ytbt-immersive-translation";
     container.dataset.ytbtImmersiveTranslation = "true";
     container.dataset.ytbtImmersiveFor = block.id;
     container.dataset.ytbtState = "loading";
 
-    const label = document.createElement("span");
-    label.className = "ytbt-immersive-label";
-    label.textContent = "\u4e2d\u6587";
-
     const text = document.createElement("span");
     text.className = "ytbt-immersive-text";
     text.textContent = "Translating...";
 
-    container.appendChild(label);
     container.appendChild(text);
-
-    if (block.element.tagName === "LI") {
-      block.element.appendChild(container);
-    } else {
-      block.element.insertAdjacentElement("afterend", container);
-    }
+    block.element.appendChild(container);
 
     return container;
   }
@@ -584,11 +589,10 @@
 
   function updateBallMode(mode) {
     state.mode = mode;
-    if (!state.ball || !state.ballText) {
+    if (!state.ball) {
       return;
     }
     state.ball.dataset.ytbtState = mode;
-    state.ballText.textContent = mode === "done" ? "\u2713" : "\u8bd1";
   }
 
   function showStatus(message, persistent) {

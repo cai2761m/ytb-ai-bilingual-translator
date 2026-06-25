@@ -1,59 +1,76 @@
-.ytbt-immersive-ball {
+.ytbt-immersive-tab {
   position: fixed;
   top: 50%;
-  right: 18px;
+  right: 0;
   z-index: 2147483645;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  margin: 0;
+  background: #ffffff;
+  border-radius: 999px 0 0 999px;
+  box-shadow: -2px 4px 12px rgba(0, 0, 0, 0.08);
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+  transform: translateY(-50%);
+  transition:
+    top 160ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    right 300ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    transform 160ms ease,
+    border-radius 160ms ease,
+    border-color 160ms ease,
+    box-shadow 160ms ease;
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  border-right-color: transparent;
+}
+
+.ytbt-immersive-tab:hover {
+  box-shadow: -4px 6px 20px rgba(0, 0, 0, 0.15);
+  background: #ffffff;
+}
+
+.ytbt-immersive-tab:active {
+  transform: translateY(-50%) scale(0.98);
+}
+
+.ytbt-immersive-tab.ytbt-immersive-dragging {
+  cursor: grabbing;
+  border-radius: 999px;
+  border-right-color: rgba(0, 0, 0, 0.06);
+  transition: box-shadow 120ms ease, border-radius 120ms ease, border-color 120ms ease;
+}
+
+.ytbt-immersive-ball {
+  box-sizing: border-box;
   display: grid;
   place-items: center;
   width: 32px;
   height: 32px;
-  border: 1px solid rgba(255, 255, 255, 0.68);
+  padding: 0;
+  margin: 0;
+  border: none;
   border-radius: 999px;
   background: linear-gradient(145deg, #fb9bb7, #f472b6);
   color: #fff;
-  box-shadow:
-    0 8px 18px rgba(190, 24, 93, 0.22),
-    inset 0 1px 0 rgba(255, 255, 255, 0.34);
-  cursor: grab;
-  font-family: Arial, "Microsoft YaHei", sans-serif;
-  font-size: 15px;
-  font-weight: 800;
-  line-height: 1;
-  transform: translateY(-50%);
-  touch-action: none;
-  user-select: none;
-  transition:
-    top 120ms ease,
-    transform 160ms ease,
-    box-shadow 160ms ease,
-    opacity 160ms ease;
+  box-shadow: 0 4px 10px rgba(190, 24, 93, 0.22);
+  pointer-events: none;
+  transition: transform 160ms ease;
 }
 
-.ytbt-immersive-ball:hover {
-  box-shadow:
-    0 10px 22px rgba(190, 24, 93, 0.26),
-    inset 0 1px 0 rgba(255, 255, 255, 0.38);
-  transform: translateY(-50%) scale(1.05);
-}
-
-.ytbt-immersive-ball:active {
-  transform: translateY(-50%) scale(0.98);
-}
-
-.ytbt-immersive-ball[data-ytbt-state="translating"] {
+.ytbt-immersive-tab[data-ytbt-state="translating"] .ytbt-immersive-ball {
   animation: ytbt-immersive-pulse 1.2s ease-in-out infinite;
 }
 
-.ytbt-immersive-ball.ytbt-immersive-dragging {
-  cursor: grabbing;
-  transition: box-shadow 120ms ease, opacity 120ms ease;
-}
-
-.ytbt-immersive-ball[data-ytbt-state="done"] {
+.ytbt-immersive-tab[data-ytbt-state="done"] .ytbt-immersive-ball {
   background: linear-gradient(145deg, #047857, #16a34a);
 }
 
-.ytbt-immersive-ball[data-ytbt-state="error"] {
+.ytbt-immersive-tab[data-ytbt-state="error"] .ytbt-immersive-ball {
   background: linear-gradient(145deg, #b91c1c, #ef4444);
 }
 
@@ -88,49 +105,60 @@
   box-sizing: border-box;
   display: block;
   width: 100%;
-  margin: 0.35em 0 0.65em;
-  padding: 0.55em 0.72em;
-  border-left: 3px solid #0f766e;
-  border-radius: 6px;
-  background: rgba(240, 253, 250, 0.9);
-  color: #134e4a;
-  font-family: Arial, "Microsoft YaHei", sans-serif;
-  font-size: 0.96em;
-  line-height: 1.65;
-  text-align: left;
+  margin: 0.35em 0 0.15em;
+  color: inherit;
+  font-family: inherit;
+  font-size: 1em;
+  line-height: inherit;
+  text-align: inherit;
 }
 
 li > .ytbt-immersive-translation {
-  margin-top: 0.45em;
+  margin-top: 0.3em;
 }
 
-.ytbt-immersive-label {
-  display: inline-block;
-  margin: 0 0.5em 0 0;
-  padding: 0.1em 0.42em;
-  border-radius: 999px;
-  background: #0f766e;
-  color: #fff;
-  font-size: 0.78em;
-  font-weight: 800;
-  line-height: 1.5;
-  vertical-align: 0.08em;
+h1 > .ytbt-immersive-translation,
+h2 > .ytbt-immersive-translation,
+h3 > .ytbt-immersive-translation,
+h4 > .ytbt-immersive-translation,
+h5 > .ytbt-immersive-translation,
+h6 > .ytbt-immersive-translation,
+a > .ytbt-immersive-translation,
+strong > .ytbt-immersive-translation,
+em > .ytbt-immersive-translation,
+b > .ytbt-immersive-translation,
+i > .ytbt-immersive-translation,
+span > .ytbt-immersive-translation {
+  display: inline;
+  margin: 0;
+  width: auto;
+}
+
+h1 > .ytbt-immersive-translation::before,
+h2 > .ytbt-immersive-translation::before,
+h3 > .ytbt-immersive-translation::before,
+h4 > .ytbt-immersive-translation::before,
+h5 > .ytbt-immersive-translation::before,
+h6 > .ytbt-immersive-translation::before,
+a > .ytbt-immersive-translation::before,
+strong > .ytbt-immersive-translation::before,
+em > .ytbt-immersive-translation::before,
+b > .ytbt-immersive-translation::before,
+i > .ytbt-immersive-translation::before,
+span > .ytbt-immersive-translation::before {
+  content: " ";
 }
 
 .ytbt-immersive-text {
-  font-weight: 500;
+  font-weight: inherit;
 }
 
 .ytbt-immersive-translation[data-ytbt-state="loading"] {
-  color: #475569;
-  background: rgba(248, 250, 252, 0.94);
-  border-left-color: #94a3b8;
+  color: #6b7280;
 }
 
 .ytbt-immersive-translation[data-ytbt-state="error"] {
-  color: #991b1b;
-  background: rgba(254, 242, 242, 0.94);
-  border-left-color: #dc2626;
+  color: #b91c1c;
 }
 
 html.ytbt-immersive-hidden .ytbt-immersive-translation {
@@ -148,11 +176,19 @@ html.ytbt-immersive-hidden .ytbt-immersive-translation {
 }
 
 @media (max-width: 640px) {
+  .ytbt-immersive-tab {
+    width: 36px;
+    height: 36px;
+    border-radius: 999px 0 0 999px;
+  }
+
+  .ytbt-immersive-tab.ytbt-immersive-dragging {
+    border-radius: 999px;
+  }
+
   .ytbt-immersive-ball {
-    right: 12px;
-    width: 30px;
-    height: 30px;
-    font-size: 14px;
+    width: 28px;
+    height: 28px;
   }
 
   .ytbt-immersive-panel {
