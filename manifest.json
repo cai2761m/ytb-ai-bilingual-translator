@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "ytb-ai-bilingual-translator",
+  "name": "AuraTranslate",
   "version": "0.1.0",
-  "description": "ytb-ai-bilingual-translator",
+  "description": "AuraTranslate - AI bilingual subtitles and immersive webpage translation",
   "permissions": ["storage"],
   "host_permissions": [
     "https://www.youtube.com/*",
@@ -36,7 +36,7 @@
   ],
   "options_page": "options/options.html",
   "action": {
-    "default_title": "ytb-ai-bilingual-translator",
+    "default_title": "AuraTranslate",
     "default_popup": "popup/popup.html"
   }
 }

@@ -7,31 +7,96 @@
   }
 
   const BLOCK_SELECTOR = [
+    ".entry-content h1",
+    ".entry-content h2",
+    ".entry-content h3",
+    ".entry-content h4",
+    ".entry-content h5",
+    ".entry-content h6",
+    ".entry-content p",
+    ".entry-content li",
+    ".entry-content blockquote",
+    ".entry-content figcaption",
+    ".entry-content dd",
+    ".post-content h1",
+    ".post-content h2",
+    ".post-content h3",
+    ".post-content h4",
+    ".post-content h5",
+    ".post-content h6",
+    ".post-content p",
+    ".post-content li",
+    ".post-content blockquote",
+    ".post-content figcaption",
+    ".post-content dd",
+    ".article-content h1",
+    ".article-content h2",
+    ".article-content h3",
+    ".article-content h4",
+    ".article-content h5",
+    ".article-content h6",
+    ".article-content p",
+    ".article-content li",
+    ".article-content blockquote",
+    ".article-content figcaption",
+    ".article-content dd",
+    "#content h1",
+    "#content h2",
+    "#content h3",
+    "#content h4",
+    "#content h5",
+    "#content h6",
+    "#content p",
+    "#content li",
+    "#content blockquote",
     "article h1",
     "article h2",
     "article h3",
     "article h4",
+    "article h5",
+    "article h6",
     "article p",
     "article li",
     "article blockquote",
+    "article figcaption",
+    "article dd",
+    "article header a",
+    "article header span",
+    "article header time",
     "main h1",
     "main h2",
     "main h3",
     "main h4",
+    "main h5",
+    "main h6",
     "main p",
     "main li",
     "main blockquote",
+    "main figcaption",
+    "main dd",
+    "main header a",
+    "main header span",
+    "main header time",
     "[role='main'] h1",
     "[role='main'] h2",
     "[role='main'] h3",
     "[role='main'] h4",
+    "[role='main'] h5",
+    "[role='main'] h6",
     "[role='main'] p",
     "[role='main'] li",
     "[role='main'] blockquote",
+    "[role='main'] figcaption",
+    "[role='main'] dd",
+    "[role='main'] header a",
+    "[role='main'] header span",
+    "[role='main'] header time",
     "body > h1",
     "body > h2",
     "body > h3",
     "body > h4",
+    "body > h5",
+    "body > h6",
     "body > p",
     "body > ul > li",
     "body > ol > li",
@@ -51,13 +116,41 @@
     "textarea",
     "select",
     "nav",
-    "header",
     "footer",
     "form",
     "[contenteditable='true']",
     "[aria-hidden='true']",
     "[data-ytbt-immersive-root]",
     "[data-ytbt-immersive-translation]"
+  ].join(",");
+  const CONTENT_SCOPE_SELECTOR = [
+    "article",
+    "main",
+    "[role='main']",
+    ".entry-content",
+    ".post-content",
+    ".article-content",
+    "#content"
+  ].join(",");
+  const SHORT_TEXT_SELECTOR = [
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "dt",
+    "figcaption",
+    "caption",
+    "article header a",
+    "article header span",
+    "article header time",
+    "main header a",
+    "main header span",
+    "main header time",
+    "[role='main'] header a",
+    "[role='main'] header span",
+    "[role='main'] header time"
   ].join(",");
   const MAX_BLOCKS = 80;
   const MIN_TEXT_LENGTH = 24;
@@ -317,6 +410,7 @@
   }
 
   async function translateCurrentPage() {
+    clearExistingTranslations();
     const blocks = collectBlocks();
     if (!blocks.length) {
       updateBallMode("idle");
@@ -392,7 +486,7 @@
       }
 
       const text = extractReadableText(element);
-      if (!looksLikeEnglishText(text)) {
+      if (!looksLikeEnglishTextForElement(element, text)) {
         continue;
       }
 
@@ -409,7 +503,13 @@
     if (!element || element.closest(SKIP_SELECTOR)) {
       return false;
     }
-    if (element.querySelector(BLOCK_SELECTOR)) {
+    if (element.closest("[data-ytbt-immersive-source]")) {
+      return false;
+    }
+    if (isInSiteChromeHeader(element)) {
+      return false;
+    }
+    if (!isShortTextBlock(element) && element.querySelector(BLOCK_SELECTOR)) {
       return false;
     }
     if (element.closest(".ytp-caption-window-container, .caption-window, .ytbt-overlay")) {
@@ -419,6 +519,11 @@
       return false;
     }
     return true;
+  }
+
+  function isInSiteChromeHeader(element) {
+    const header = element.closest("header");
+    return Boolean(header && !header.closest(CONTENT_SCOPE_SELECTOR));
   }
 
   function isVisible(element) {
@@ -445,7 +550,11 @@
   }
 
   function looksLikeEnglishText(text) {
-    if (!text || text.length < MIN_TEXT_LENGTH) {
+    return looksLikeEnglishTextForElement(null, text);
+  }
+
+  function looksLikeEnglishTextForElement(element, text) {
+    if (!text) {
       return false;
     }
     if (!/[A-Za-z]/.test(text)) {
@@ -456,7 +565,25 @@
     }
 
     const words = text.match(/[A-Za-z][A-Za-z'-]*/g) || [];
-    return words.length >= 5;
+    if (isShortTextBlock(element)) {
+      return words.length >= 1 && text.length >= 2;
+    }
+
+    return text.length >= MIN_TEXT_LENGTH && words.length >= 4;
+  }
+
+  function isShortTextBlock(element) {
+    return Boolean(element && element.matches(SHORT_TEXT_SELECTOR));
+  }
+
+  function clearExistingTranslations() {
+    for (const node of document.querySelectorAll("[data-ytbt-immersive-translation]")) {
+      node.remove();
+    }
+    for (const source of document.querySelectorAll("[data-ytbt-immersive-source]")) {
+      delete source.dataset.ytbtImmersiveSource;
+      source.classList.remove("ytbt-immersive-source");
+    }
   }
 
   function createTranslationContainer(block) {

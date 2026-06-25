@@ -1,8 +1,8 @@
 {
-  "name": "ytb-ai-bilingual-translator",
+  "name": "auratranslate",
   "version": "0.1.0",
   "private": true,
-  "description": "ytb-ai-bilingual-translator",
+  "description": "AuraTranslate",
   "scripts": {
     "test": "node --test"
   },

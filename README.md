@@ -1,6 +1,6 @@
 [English](./README.md) | [中文](./README_zh.md)
 
-# ytb-ai-bilingual-translator
+# AuraTranslate
 
 ## About
 

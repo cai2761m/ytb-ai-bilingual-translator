@@ -117,12 +117,6 @@ li > .ytbt-immersive-translation {
   margin-top: 0.3em;
 }
 
-h1 > .ytbt-immersive-translation,
-h2 > .ytbt-immersive-translation,
-h3 > .ytbt-immersive-translation,
-h4 > .ytbt-immersive-translation,
-h5 > .ytbt-immersive-translation,
-h6 > .ytbt-immersive-translation,
 a > .ytbt-immersive-translation,
 strong > .ytbt-immersive-translation,
 em > .ytbt-immersive-translation,
@@ -134,12 +128,6 @@ span > .ytbt-immersive-translation {
   width: auto;
 }
 
-h1 > .ytbt-immersive-translation::before,
-h2 > .ytbt-immersive-translation::before,
-h3 > .ytbt-immersive-translation::before,
-h4 > .ytbt-immersive-translation::before,
-h5 > .ytbt-immersive-translation::before,
-h6 > .ytbt-immersive-translation::before,
 a > .ytbt-immersive-translation::before,
 strong > .ytbt-immersive-translation::before,
 em > .ytbt-immersive-translation::before,
