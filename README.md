@@ -1,108 +1,210 @@
-[English](./README.md) | [中文](./README_zh.md)
-
 # AuraTranslate
 
-## About
+AuraTranslate is a Chrome Manifest V3 extension for AI-powered bilingual reading. It provides real-time Chinese-English subtitles on YouTube and immersive bilingual webpage translation on regular sites.
 
-A Chrome extension (Manifest V3) that brings **AI-powered bilingual subtitles** to YouTube. It automatically fetches the English caption track from any YouTube video, merges fragmented cues into natural sentence-level segments, translates them into Chinese (Simplified or Traditional) via a configurable LLM API, and renders a sleek **Chinese-English subtitle overlay** directly on the video player — all while hiding YouTube's native CC window.
+The extension does not perform audio recognition. YouTube subtitle translation is based on existing YouTube caption tracks, while webpage translation extracts readable page text and translates it through your configured LLM API.
 
-No audio recognition is needed; the extension works entirely from YouTube's existing caption data.
+## Highlights
 
-## Features
+- YouTube bilingual subtitles: detects English caption tracks, translates them into Simplified or Traditional Chinese, and renders a draggable bilingual overlay on the video.
+- Immersive webpage translation: adds a small side-docked floating translate button on normal webpages; click it to insert Chinese translations below the original text.
+- Separate API profiles: configure one LLM API for real-time subtitle translation and another for immersive webpage translation, or let immersive translation reuse the subtitle API.
+- Multiple providers: supports DeepSeek, Gemini, and custom OpenAI-compatible Chat Completions APIs.
+- Subtitle cleanup: merges fragmented YouTube caption cues into more natural sentence-level segments before translation.
+- ASR correction: optionally asks the model to fix obvious auto-caption recognition errors before translating.
+- Priority scheduling: translates captions near the current playback position first, then continues pre-translating the rest of the video.
+- Translation cache: stores successful subtitle translations in `chrome.storage.local` to reduce repeated API calls.
+- Draggable controls: subtitle overlay position and immersive translate button position are persisted locally.
 
-- **Sentence-aware caption merging** — reassembles YouTube's word/phrase-level caption fragments into complete, readable sentences and avoids obvious broken boundaries such as "following your / nose".
-- **AI-powered translation** — translates subtitles using LLM APIs with context-aware prompts for natural, high-quality results.
-- **Priority-based scheduling** — translates captions near the current playback position first, then continues with the rest of the video in the background.
-- **ASR error correction** — optionally uses AI to fix common auto-generated subtitle mistakes before translation.
-- **Draggable overlay** — the bilingual subtitle overlay can be repositioned via long-press drag, and the position is persisted.
-- **Adjustable font size** — subtitle size can be scaled from 0.7× to 1.8× via the options page.
-- **Stable translation cache** — caches translated cues in `chrome.storage.local` with stable video/track fingerprints, so refreshing the same video reuses existing translations instead of calling the API again.
-- **In-flight request deduplication** — if a page is refreshed while translations are still running, duplicate requests for the same cue reuse the existing background request when possible.
-- **Parallel batch translation** — sends multiple batches concurrently with provider-specific batch sizes, smart back-off, partial-result handling, and retry logic for rate limits, malformed JSON, missing cue results, and server errors.
-- **Multiple translation providers**:
-  - **DeepSeek** (default) — works out of the box with an API key.
-  - **Gemini** — Google's Gemini API with dedicated batching parameters.
-  - **Custom OpenAI-compatible API** — any provider that implements the OpenAI Chat Completions interface, including API relay / model pool services.
+## Installation
 
-## Install
-
-1. Open `chrome://extensions`.
-2. Enable **Developer mode**.
-3. Click **"Load unpacked"**.
-4. Select the project folder you downloaded or cloned.
-5. Click the extension icon to open settings and configure a translation API.
+1. Download or clone this repository.
+2. Open `chrome://extensions`.
+3. Enable `Developer mode`.
+4. Click `Load unpacked`.
+5. Select the project folder.
+6. Click the AuraTranslate extension icon, then click `Settings` to configure API keys.
 
 ## Usage
 
-1. Navigate to any YouTube video with English captions.
-2. The extension automatically detects caption tracks (prefers auto-generated `asr`, falls back to manual tracks).
-3. Bilingual subtitles appear on the video in real time as captions are translated.
-4. If no English caption track is found, a "not found" status is displayed.
+### YouTube Subtitles
+
+1. Open a YouTube video that has English captions.
+2. AuraTranslate reads the available caption track.
+3. Captions are merged, translated, cached, and displayed as Chinese-English subtitles on top of the video.
+4. Long-press and drag the subtitle overlay to reposition it.
+
+### Immersive Webpage Translation
+
+1. Open a regular webpage with readable English content.
+2. Click the small floating translation button docked on the right side of the page.
+3. AuraTranslate translates headings, paragraphs, list items, blockquotes, captions, and common article header text.
+4. Chinese translations are inserted near the original text for side-by-side reading.
+5. Drag the floating button up or down to reposition it.
 
 ## Configuration
 
-Open the extension's options page (click the extension icon → settings) to configure:
+Open the extension popup and click `Settings`.
+
+### Real-Time Subtitle Translation API
+
+This API profile is used by YouTube subtitle translation.
+
+| Field | Description |
+| --- | --- |
+| Translation Provider | DeepSeek, Gemini, or a custom OpenAI-compatible API |
+| API Key | API key for the selected provider |
+| Base URL | API endpoint; DeepSeek and Gemini can be auto-filled |
+| Model | Model name; DeepSeek and Gemini can be auto-filled |
+| JSON Response Mode | Requests structured JSON output when supported |
+
+### Immersive Translation API
+
+This API profile is used by webpage translation.
+
+By default, immersive translation reuses the real-time subtitle API. Select a provider in this section only when you want immersive translation to call a different API, model, or endpoint.
+
+### General Settings
 
 | Setting | Description |
-|---|---|
-| **Translation Provider** | DeepSeek / Gemini / Custom OpenAI-compatible |
-| **API Key** | Your API key for the selected provider |
-| **Base URL** | API endpoint (auto-filled for DeepSeek & Gemini) |
-| **Model** | Model name (auto-filled for DeepSeek & Gemini) |
-| **JSON Response Mode** | Request structured JSON output (disable if your provider doesn't support it) |
-| **ASR Correction** | Toggle AI-based speech recognition error correction |
-| **Source Language** | English |
-| **Target Language** | Simplified Chinese / Traditional Chinese |
-| **Font Scale** | Subtitle size multiplier (0.7× – 1.8×) |
-| **Subtitle Enabled** | Toggle the overlay on/off and hide native YouTube CC |
+| --- | --- |
+| ASR Correction | Fix obvious YouTube auto-caption recognition errors before translation |
+| Source Language | Currently English |
+| Target Language | Simplified Chinese or Traditional Chinese |
+| Font Scale | Subtitle overlay size, from `0.7x` to `1.8x` |
+| Subtitle Enabled | Enables the custom subtitle overlay and hides native YouTube CC captions |
 
-### Custom OpenAI-Compatible APIs
+## Provider Notes
 
-For an OpenAI-compatible relay service, select **Custom OpenAI-compatible API** and fill in:
+### DeepSeek
+
+DeepSeek is the default provider. You usually only need to provide an API key.
+
+Default base URL:
+
+```text
+https://api.deepseek.com
+```
+
+Default model:
+
+```text
+deepseek-v4-flash
+```
+
+### Gemini
+
+Gemini uses Google's GenerateContent API.
+
+Default base URL:
+
+```text
+https://generativelanguage.googleapis.com/v1beta
+```
+
+Default model:
+
+```text
+gemini-3.5-flash
+```
+
+### Custom OpenAI-Compatible API
+
+Use this option for relay services or model providers that implement the OpenAI Chat Completions API.
+
+Example:
 
 | Field | Example |
-|---|---|
-| **API Key** | `sk-...` |
-| **Base URL** | `https://anpin.ai/v1` |
-| **Model** | `gpt-5.4` |
+| --- | --- |
+| API Key | `sk-...` |
+| Base URL | `https://api.example.com/v1` |
+| Model | `model-name` |
 
-Keep **JSON Response Mode** enabled first. If a provider does not support OpenAI JSON mode, disable it and the extension will still try to parse and recover usable translation results.
+If your provider does not support OpenAI JSON mode, disable `JSON Response Mode`. AuraTranslate will still try to recover usable translation JSON from the model response.
 
-### Cache Behavior
+## Cache Behavior
 
-The extension caches translations by video, source track identity, provider, endpoint, model, source language, target language, ASR correction mode, merge version, and cache version. Refreshing the same YouTube video should reuse cached translated cues. A new API request is expected only when:
+Subtitle translations are cached by:
 
-- the cue has never been translated successfully;
-- the model, provider, Base URL, target language, source language, or ASR correction setting changes;
-- the local translation cache is cleared;
-- the subtitle merge algorithm version changes.
+- video id
+- caption track fingerprint
+- provider
+- API endpoint
+- model
+- source language
+- target language
+- ASR correction mode
+- caption merge version
+- cache version
+
+A new API request is expected when a cue has not been translated before, the API configuration changes, the source or target language changes, ASR correction changes, the cache is cleared, or the merge algorithm version changes.
+
+Immersive webpage translations are currently generated on demand and inserted into the page during the current session.
+
+## Permissions
+
+AuraTranslate uses:
+
+- `storage`: saves API settings, subtitle cache, overlay position, and floating button position.
+- `https://www.youtube.com/*`: reads YouTube caption metadata and renders bilingual subtitles.
+- `http://*/*` and `https://*/*`: injects the immersive webpage translation button and translation renderer.
 
 ## Project Structure
 
-```
-├── manifest.json          # Chrome MV3 extension manifest
-├── src/
-│   ├── background.js      # Service worker: handles API calls & message routing
-│   ├── content.js         # Content script: caption fetching, translation queue, overlay rendering
-│   ├── shared.js          # Shared utilities: settings, caption merging, prompt generation
-│   ├── overlay.css        # Subtitle overlay styles
-│   └── page-bridge.js     # Page-level script injected to intercept YouTube player data
-├── options/
-│   ├── options.html       # Settings UI
-│   ├── options.css        # Settings page styles
-│   └── options.js         # Settings page logic
-└── test/                  # Unit tests
+```text
+manifest.json              Chrome extension manifest
+package.json               Project metadata and npm scripts
+src/
+  background.js            Service worker for API calls, cache, and message routing
+  content.js               YouTube caption loading, translation queue, and subtitle overlay
+  immersive.js             Webpage text extraction and immersive translation renderer
+  shared.js                Shared settings, caption parsing, merging, and config helpers
+  overlay.css              YouTube subtitle overlay styles
+  immersive.css            Webpage translation button and inline translation styles
+  page-bridge.js           Injected YouTube page bridge for player metadata
+popup/
+  popup.html               Lightweight extension popup
+  popup.css                Popup styles
+  popup.js                 Opens the options page from the popup
+options/
+  options.html             Settings page
+  options.css              Settings page styles
+  options.js               Settings persistence and provider switching
+test/
+  subtitle-utils.test.js   Unit tests for parsing, merging, config, and errors
 ```
 
 ## Development
 
-Run the unit tests with:
+Run tests:
 
 ```powershell
 node --test
 ```
 
-If PowerShell blocks `npm.ps1`, use `node --test` directly or run `npm.cmd test`.
+Check JavaScript syntax:
+
+```powershell
+node --check src\background.js
+node --check src\content.js
+node --check src\immersive.js
+node --check options\options.js
+node --check popup\popup.js
+```
+
+If PowerShell blocks `npm.ps1`, run `node --test` directly or use:
+
+```powershell
+npm.cmd test
+```
+
+## Troubleshooting
+
+- No YouTube subtitles: confirm the video has an English caption track available in YouTube's native CC menu.
+- API key error: open AuraTranslate settings and confirm the provider, API key, base URL, and model.
+- Translation returns malformed content: try enabling `JSON Response Mode`; if the provider does not support it, disable it and retry.
+- Immersive translation misses content: some websites render text in custom components or protected regions. Try refreshing the page, scrolling the content into view, then clicking the floating button again.
+- Native YouTube captions still appear: turn off YouTube's CC button or reload the page after enabling AuraTranslate subtitles.
 
 ## License
 
