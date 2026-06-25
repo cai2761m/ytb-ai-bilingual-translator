@@ -60,6 +60,70 @@ p {
   margin-bottom: 4px;
 }
 
+.popup-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  cursor: pointer;
+}
+
+.popup-toggle span {
+  display: grid;
+  gap: 4px;
+}
+
+.popup-toggle strong {
+  font-size: 14px;
+  line-height: 1.35;
+}
+
+.popup-toggle small {
+  color: #6b7280;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.popup-toggle input {
+  flex: 0 0 auto;
+  appearance: none;
+  position: relative;
+  width: 30px;
+  height: 18px;
+  margin: 0;
+  border: 0;
+  border-radius: 999px;
+  background: #c9cdd2;
+  cursor: pointer;
+  transition: background 160ms ease;
+}
+
+.popup-toggle input::before {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 12px;
+  height: 12px;
+  border-radius: 999px;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.2);
+  transition: transform 160ms ease;
+}
+
+.popup-toggle input:checked {
+  background: #2563eb;
+}
+
+.popup-toggle input:checked::before {
+  transform: translateX(12px);
+}
+
+.popup-toggle input:focus-visible {
+  outline: 3px solid rgba(37, 99, 235, 0.18);
+  outline-offset: 2px;
+}
+
 button {
   border: 0;
   border-radius: 6px;

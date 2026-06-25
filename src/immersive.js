@@ -116,8 +116,15 @@
     "textarea",
     "select",
     "nav",
+    "aside",
     "footer",
     "form",
+    "[role='navigation']",
+    "[role='menu']",
+    "[role='menubar']",
+    "[role='button']",
+    "[role='tab']",
+    "[role='tablist']",
     "[contenteditable='true']",
     "[aria-hidden='true']",
     "[data-ytbt-immersive-root]",
@@ -130,7 +137,65 @@
     ".entry-content",
     ".post-content",
     ".article-content",
+    ".article-body",
+    ".post-body",
+    ".markdown-body",
+    ".prose",
+    ".content",
+    ".container",
+    ".post",
+    ".article",
     "#content"
+  ].join(",");
+  const READABLE_LEAF_SELECTOR = [
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "p",
+    "li",
+    "blockquote",
+    "figcaption",
+    "caption",
+    "dt",
+    "dd",
+    "td",
+    "th",
+    "summary",
+    "time",
+    "small",
+    "a",
+    "span",
+    "strong",
+    "em",
+    "b",
+    "i"
+  ].join(",");
+  const READABLE_DESCENDANT_SELECTOR = [
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "h5",
+    "h6",
+    "p",
+    "li",
+    "blockquote",
+    "figcaption",
+    "caption",
+    "dt",
+    "dd",
+    "td",
+    "th",
+    "summary",
+    "div",
+    "section",
+    "article",
+    "table",
+    "ul",
+    "ol"
   ].join(",");
   const SHORT_TEXT_SELECTOR = [
     "h1",
@@ -152,7 +217,16 @@
     "[role='main'] header span",
     "[role='main'] header time"
   ].join(",");
-  const MAX_BLOCKS = 80;
+  const SHORT_TEXT_CLASS_SELECTOR = [
+    "[class*='title' i]",
+    "[class*='heading' i]",
+    "[class*='headline' i]",
+    "[class*='byline' i]",
+    "[class*='author' i]",
+    "[class*='meta' i]"
+  ].join(",");
+  const CONTAINER_TEXT_TAGS = new Set(["DIV", "SECTION", "HEADER", "ARTICLE", "MAIN"]);
+  const MAX_BLOCKS = 240;
   const MIN_TEXT_LENGTH = 24;
   const MAX_TEXT_LENGTH = 4000;
   const BATCH_SIZE = 8;
@@ -474,7 +548,7 @@
   }
 
   function collectBlocks() {
-    const candidates = Array.from(document.querySelectorAll(BLOCK_SELECTOR));
+    const candidates = collectCandidateElements();
     const blocks = [];
 
     for (const element of candidates) {
@@ -499,6 +573,91 @@
     return blocks;
   }
 
+  function collectCandidateElements() {
+    const seen = new Set();
+    for (const element of document.querySelectorAll(BLOCK_SELECTOR)) {
+      seen.add(element);
+    }
+
+    for (const root of collectContentRoots()) {
+      collectHeuristicCandidates(root, seen);
+    }
+
+    return Array.from(seen).sort(compareDocumentOrder);
+  }
+
+  function collectContentRoots() {
+    const roots = [];
+    for (const root of document.querySelectorAll(CONTENT_SCOPE_SELECTOR)) {
+      if (!root || roots.some((existing) => existing.contains(root))) {
+        continue;
+      }
+      if (!isVisible(root)) {
+        continue;
+      }
+      const text = Core.normalizeSubtitleText(root.innerText || root.textContent || "");
+      if (text.length >= MIN_TEXT_LENGTH) {
+        roots.push(root);
+      }
+    }
+
+    return roots.length ? roots : [document.body].filter(Boolean);
+  }
+
+  function collectHeuristicCandidates(root, seen) {
+    if (!root) {
+      return;
+    }
+
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
+    let element = root.nodeType === Node.ELEMENT_NODE ? root : walker.nextNode();
+    while (element) {
+      if (isHeuristicCandidate(element)) {
+        seen.add(element);
+      }
+      element = walker.nextNode();
+    }
+  }
+
+  function isHeuristicCandidate(element) {
+    if (!element || element === document.body || element === document.documentElement) {
+      return false;
+    }
+    if (element.closest(SKIP_SELECTOR)) {
+      return false;
+    }
+    if (isInSiteChromeHeader(element)) {
+      return false;
+    }
+    if (element.closest(".ytp-caption-window-container, .caption-window, .ytbt-overlay")) {
+      return false;
+    }
+    if (!isVisible(element)) {
+      return false;
+    }
+
+    if (element.matches(READABLE_LEAF_SELECTOR)) {
+      return true;
+    }
+
+    if (!CONTAINER_TEXT_TAGS.has(element.tagName)) {
+      return false;
+    }
+    if (hasReadableDescendantBlock(element)) {
+      return false;
+    }
+
+    const text = extractReadableText(element);
+    return looksLikeEnglishTextForElement(element, text);
+  }
+
+  function compareDocumentOrder(left, right) {
+    if (left === right) {
+      return 0;
+    }
+    return left.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_PRECEDING ? 1 : -1;
+  }
+
   function isUsableBlock(element) {
     if (!element || element.closest(SKIP_SELECTOR)) {
       return false;
@@ -509,7 +668,7 @@
     if (isInSiteChromeHeader(element)) {
       return false;
     }
-    if (!isShortTextBlock(element) && element.querySelector(BLOCK_SELECTOR)) {
+    if (!isShortTextBlock(element) && (element.querySelector(BLOCK_SELECTOR) || hasReadableDescendantBlock(element))) {
       return false;
     }
     if (element.closest(".ytp-caption-window-container, .caption-window, .ytbt-overlay")) {
@@ -524,6 +683,22 @@
   function isInSiteChromeHeader(element) {
     const header = element.closest("header");
     return Boolean(header && !header.closest(CONTENT_SCOPE_SELECTOR));
+  }
+
+  function hasReadableDescendantBlock(element) {
+    for (const descendant of element.querySelectorAll(READABLE_DESCENDANT_SELECTOR)) {
+      if (descendant === element || descendant.closest(SKIP_SELECTOR)) {
+        continue;
+      }
+      if (!isVisible(descendant)) {
+        continue;
+      }
+      const text = extractReadableText(descendant);
+      if (looksLikeEnglishTextForElement(descendant, text)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   function isVisible(element) {
@@ -573,7 +748,11 @@
   }
 
   function isShortTextBlock(element) {
-    return Boolean(element && element.matches(SHORT_TEXT_SELECTOR));
+    return Boolean(
+      element &&
+        (element.matches(SHORT_TEXT_SELECTOR) ||
+          (element.closest(CONTENT_SCOPE_SELECTOR) && element.matches(SHORT_TEXT_CLASS_SELECTOR)))
+    );
   }
 
   function clearExistingTranslations() {
